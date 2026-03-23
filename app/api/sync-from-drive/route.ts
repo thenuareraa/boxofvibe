@@ -42,7 +42,7 @@ export async function POST() {
     let pageToken: string | undefined = undefined;
 
     do {
-      const driveResponse = await drive.files.list({
+      const driveResponse: any = await drive.files.list({
         q: `'${process.env.GOOGLE_DRIVE_FOLDER_ID}' in parents and mimeType='audio/mpeg' and trashed=false`,
         fields: 'nextPageToken, files(id, name, size)',
         pageSize: 1000, // Maximum allowed by Google Drive API
@@ -93,8 +93,8 @@ export async function POST() {
     console.log('New files to sync:', newFiles.length);
     console.log('New files:', newFiles.map(f => ({ id: f.id, name: f.name })));
 
-    const syncedSongs = [];
-    const errors = [];
+    const syncedSongs: any[] = [];
+    const errors: any[] = [];
 
     // Process files in parallel batches of 5 for speed
     const BATCH_SIZE = 5;
@@ -130,7 +130,7 @@ export async function POST() {
                 );
 
                 const buffer = Buffer.from(response.data as ArrayBuffer);
-                const metadata = await parseBuffer(buffer, { mimeType: 'audio/mpeg', skipCovers: true });
+                const metadata = await parseBuffer(buffer, { mimeType: 'audio/mpeg' });
 
                 title = metadata.common.title || nameWithoutExt;
                 artist = metadata.common.artist || 'Unknown Artist';

@@ -105,13 +105,13 @@ export async function POST() {
     let continuationToken: string | undefined = undefined;
 
     do {
-      const listCommand = new ListObjectsV2Command({
+      const listCommand: any = new ListObjectsV2Command({
         Bucket: process.env.R2_BUCKET_NAME!,
         MaxKeys: 1000,
         ContinuationToken: continuationToken,
       });
 
-      const result = await r2Client.send(listCommand);
+      const result: any = await r2Client.send(listCommand);
       if (result.Contents) {
         allFiles = allFiles.concat(result.Contents);
       }
@@ -156,8 +156,8 @@ export async function POST() {
 
     console.log('New files to sync:', newFiles.length);
 
-    const syncedSongs = [];
-    const errors = [];
+    const syncedSongs: any[] = [];
+    const errors: any[] = [];
 
     for (const file of newFiles) {
       try {
