@@ -1010,11 +1010,6 @@ export default function Dashboard() {
           </button>
         </nav>
 
-        {/* User Info */}
-        <div className="mb-4 p-4 bg-white/5 rounded-lg border border-white/10">
-          <p className="text-gray-400 text-xs mb-1">Logged in as</p>
-          <p className="text-white text-sm truncate">{user?.email}</p>
-        </div>
 
         {/* Logout Button */}
         <button
@@ -2070,74 +2065,6 @@ export default function Dashboard() {
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Debug Panel */}
-      <div className="fixed bottom-24 left-6 z-50">
-        <button
-          onClick={() => setShowDebug(!showDebug)}
-          className={`mb-2 px-4 py-2 rounded-lg backdrop-blur-xl border font-mono text-xs ${
-            debugLogs.some(log => log.includes('ERROR'))
-              ? 'bg-red-500/20 border-red-500/50 text-red-200'
-              : 'bg-gray-900/80 border-white/20 text-gray-400'
-          } hover:bg-white/10 transition-all`}
-        >
-          {debugLogs.some(log => log.includes('ERROR')) ? 'Ã¢Å¡Â Ã¯Â¸Â' : 'Ã°Å¸Ââ€º'} Debug ({debugLogs.length})
-        </button>
-
-        <AnimatePresence>
-          {showDebug && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              className="bg-black/95 backdrop-blur-xl border border-white/20 rounded-lg p-4 max-w-2xl max-h-96 overflow-auto"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-white font-mono text-sm font-bold">Debug Logs</h3>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      const logs = debugLogs.join('\n');
-                      navigator.clipboard.writeText(logs);
-                      showNotification('success', 'Logs copied to clipboard');
-                    }}
-                    className="px-3 py-1 bg-purple-500/20 text-purple-300 rounded text-xs hover:bg-purple-500/30 transition-all"
-                  >
-                    Copy All
-                  </button>
-                  <button
-                    onClick={() => setDebugLogs([])}
-                    className="px-3 py-1 bg-red-500/20 text-red-300 rounded text-xs hover:bg-red-500/30 transition-all"
-                  >
-                    Clear
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                {debugLogs.length === 0 ? (
-                  <p className="text-gray-500 text-xs font-mono">No logs yet...</p>
-                ) : (
-                  debugLogs.map((log, index) => (
-                    <div
-                      key={index}
-                      className={`font-mono text-xs p-2 rounded ${
-                        log.includes('ERROR')
-                          ? 'bg-red-500/10 text-red-300'
-                          : log.includes('SUCCESS')
-                          ? 'bg-green-500/10 text-green-300'
-                          : 'bg-white/5 text-gray-300'
-                      }`}
-                    >
-                      {log}
-                    </div>
-                  ))
-                )}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
 
       {/* Custom Loop Modal */}
       <AnimatePresence>
