@@ -644,12 +644,12 @@ export default function Dashboard() {
   };
 
   const fetchPlaylists = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
+    if (!user) return;
 
     const { data, error } = await supabase
       .from('playlists')
       .select('*')
+      .eq('custom_user_id', user.id)
       .order('created_at', { ascending: false });
 
     if (!error && data) {
@@ -676,7 +676,7 @@ export default function Dashboard() {
       .insert([
         {
           name: newPlaylistName,
-          user_id: user.id
+          custom_user_id: user.id
         }
       ])
       .select();
