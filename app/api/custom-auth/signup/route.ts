@@ -33,6 +33,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Generate a unique 4-digit code
+    let uniqueCode = '';
+    let attempts = 0;
+    while (attempts < 100) {
+      uniqueCode = String(Math.floor(1000 + Math.random() * 9000));
+      const { data: existing } = await supabase.from('custom_users').select('id').eq('unique_code', uniqueCode).single();
+      if (!existing) break;
+      attempts++;
+    }
+
     // Create user with PLAIN TEXT password - NO EMAIL
     const { data: newUser, error: createError } = await supabase
       .from('custom_users')
@@ -41,6 +51,7 @@ export async function POST(request: NextRequest) {
           email: `${username}@local.user`, // Dummy email for database
           password: password, // PLAIN TEXT - visible to admin
           username: username,
+          unique_code: uniqueCode,
         },
       ])
       .select()

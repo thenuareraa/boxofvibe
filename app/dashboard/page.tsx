@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Music,
@@ -17,12 +17,21 @@ import {
   Home,
   ListMusic,
   User,
+  Users,
   Plus,
   MoreVertical,
   LogOut,
   Settings,
   Radio,
   List,
+  Scissors,
+  UserPlus,
+  UserCheck,
+  Bell,
+  ChevronRight,
+  X,
+  Check,
+  Copy,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase, type Song } from '@/lib/supabase';
@@ -64,8 +73,25 @@ export default function Dashboard() {
   const [customLoopSelection, setCustomLoopSelection] = useState<Set<number>>(new Set());
   const [customLoopQueue, setCustomLoopQueue] = useState<Song[]>([]);
   const [isCustomLoopActive, setIsCustomLoopActive] = useState(false);
+  const [customLoopSearch, setCustomLoopSearch] = useState('');
+  const [customLoopSource, setCustomLoopSource] = useState<Song[]>([]);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  // Vibe Loop state
+  const [showVibeLoop, setShowVibeLoop] = useState(false);
+  const [vibeLoopStart, setVibeLoopStart] = useState(0);
+  const [vibeLoopEnd, setVibeLoopEnd] = useState(100);
+  const [isVibeLoopActive, setIsVibeLoopActive] = useState(false);
+  // Friends state
+  const [friendsTab, setFriendsTab] = useState<'list'|'add'|'requests'>('list');
+  const [friends, setFriends] = useState<any[]>([]);
+  const [friendRequests, setFriendRequests] = useState<any[]>([]);
+  const [addFriendCode, setAddFriendCode] = useState('');
+  const [friendRequestCount, setFriendRequestCount] = useState(0);
+  const [viewingFriend, setViewingFriend] = useState<any | null>(null);
+  const [friendPlaylists, setFriendPlaylists] = useState<any[]>([]);
+  const [showCopyPlaylistModal, setShowCopyPlaylistModal] = useState<any | null>(null);
+  const [copyPlaylistName, setCopyPlaylistName] = useState('');
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -128,11 +154,28 @@ export default function Dashboard() {
         console.error('Error fetching songs:', songsError);
       } else {
         setSongs(songsData || []);
-        if (songsData && songsData.length > 0 && !currentSong) {
-          setCurrentSong(songsData[0]);
-          setCurrentQueue(songsData);
-          setQueueIndex(0);
-          addDebugLog(`Auto-loaded first song with queue of ${songsData.length} songs`);
+        if (songsData && songsData.length > 0) {
+          // SESSION PERSISTENCE: restore last played song
+          const lastSongId = localStorage.getItem('bov_last_song_id');
+          const lastPosition = parseFloat(localStorage.getItem('bov_last_position') || '0');
+          const savedSong = lastSongId ? songsData.find((s: Song) => s.id === parseInt(lastSongId)) : null;
+          if (savedSong) {
+            setCurrentSong(savedSong);
+            setCurrentQueue(songsData);
+            setQueueIndex(songsData.findIndex((s: Song) => s.id === savedSong.id));
+            // Seek to last position after audio loads
+            setTimeout(() => {
+              if (audioRef.current && lastPosition > 0) {
+                audioRef.current.currentTime = lastPosition;
+              }
+            }, 800);
+            addDebugLog(`Restored last song: ${savedSong.title} at ${lastPosition}s`);
+          } else {
+            setCurrentSong(songsData[0]);
+            setCurrentQueue(songsData);
+            setQueueIndex(0);
+            addDebugLog(`Auto-loaded first song with queue of ${songsData.length} songs`);
+          }
         }
       }
 
@@ -154,6 +197,65 @@ export default function Dashboard() {
 
     fetchData();
   }, []);
+
+  // SESSION PERSISTENCE: save current song + position every 5 seconds
+  useEffect(() => {
+    if (!currentSong) return;
+    localStorage.setItem('bov_last_song_id', String(currentSong.id));
+    const interval = setInterval(() => {
+      if (audioRef.current) {
+        localStorage.setItem('bov_last_position', String(audioRef.current.currentTime));
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [currentSong]);
+
+  // ONLINE HEARTBEAT: update last_seen every 30 seconds
+  useEffect(() => {
+    if (!user) return;
+    const heartbeat = async () => {
+      await supabase
+        .from('custom_users')
+        .update({ last_seen: new Date().toISOString() })
+        .eq('id', user.id);
+    };
+    heartbeat();
+    const interval = setInterval(heartbeat, 30000);
+    // Mark offline on unload
+    const handleUnload = () => {
+      navigator.sendBeacon('/api/custom-auth/heartbeat-offline', JSON.stringify({ user_id: user.id }));
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('beforeunload', handleUnload);
+    };
+  }, [user]);
+
+  // FRIENDS: fetch friends and requests
+  const fetchFriends = useCallback(async () => {
+    if (!user) return;
+    try {
+      const [frRes, reqRes] = await Promise.all([
+        fetch('/api/friends'),
+        fetch('/api/friends/requests')
+      ]);
+      const frData = await frRes.json();
+      const reqData = await reqRes.json();
+      if (frData.success) setFriends(frData.friends || []);
+      if (reqData.success) {
+        const pending = (reqData.requests || []).filter((r: any) => r.status === 'pending');
+        setFriendRequests(pending);
+        setFriendRequestCount(pending.length);
+      }
+    } catch (e) {
+      console.error('Error fetching friends:', e);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (user) fetchFriends();
+  }, [user, fetchFriends]);
 
   const handleLogout = async () => {
     await fetch('/api/custom-auth/logout', { method: 'POST' });
@@ -279,7 +381,14 @@ export default function Dashboard() {
     };
 
     const handleTimeUpdate = () => {
-      // The requestAnimationFrame loop now handles this for 60FPS smoothness
+      // VIBE LOOP: check segment boundaries
+      if (isVibeLoopActive && audio.duration) {
+        const endTime = (vibeLoopEnd / 100) * audio.duration;
+        const startTime = (vibeLoopStart / 100) * audio.duration;
+        if (audio.currentTime >= endTime) {
+          audio.currentTime = startTime;
+        }
+      }
     };
 
     if (isPlaying) {
@@ -292,6 +401,13 @@ export default function Dashboard() {
       // Track completed play
       if (currentSong) {
         trackPlay(currentSong.id, true, audio.currentTime);
+      }
+
+      // If vibe loop is active, loop back to start
+      if (isVibeLoopActive && audio.duration) {
+        audio.currentTime = (vibeLoopStart / 100) * audio.duration;
+        audio.play();
+        return;
       }
 
       if (isRepeat) {
@@ -385,7 +501,7 @@ export default function Dashboard() {
       audio.removeEventListener('progress', handleProgress);
       audio.removeEventListener('error', handleError);
     };
-  }, [isRepeat, volume, isDraggingProgress, isShuffle, shuffleQueue, currentSong, currentQueue, queueIndex, isPlaying]);
+  }, [isRepeat, volume, isDraggingProgress, isShuffle, shuffleQueue, currentSong, currentQueue, queueIndex, isPlaying, isVibeLoopActive, vibeLoopStart, vibeLoopEnd]);
 
   // Click outside profile to close
   useEffect(() => {
@@ -1008,6 +1124,28 @@ export default function Dashboard() {
             <ListMusic className="w-5 h-5" />
             <span className="font-medium">Playlists</span>
           </button>
+
+          <button
+            onClick={() => {
+              setActiveTab('friends');
+              setSelectedPlaylist(null);
+              setPlaylistSongs([]);
+              fetchFriends();
+            }}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+              activeTab === 'friends'
+                ? 'bg-white/10 text-white'
+                : 'text-gray-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Users className="w-5 h-5" />
+            <span className="font-medium">Friends</span>
+            {friendRequestCount > 0 && (
+              <span className="ml-auto bg-pink-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                {friendRequestCount}
+              </span>
+            )}
+          </button>
         </nav>
 
 
@@ -1069,6 +1207,19 @@ export default function Dashboard() {
                       <div className="px-4 py-4 border-b border-white/10 bg-[#1a1a1a]">
                         <p className="text-xs text-gray-400 font-medium uppercase tracking-wider mb-1">Signed in as</p>
                         <p className="text-sm font-bold text-white truncate">{user?.email}</p>
+                        {user?.unique_code && (
+                          <div className="flex items-center gap-2 mt-2">
+                            <span className="text-xs text-gray-400">Your ID:</span>
+                            <span className="text-sm font-bold font-mono text-purple-400 tracking-widest">{user.unique_code}</span>
+                            <button
+                              onClick={() => { navigator.clipboard.writeText(user.unique_code); showNotification('success', 'ID copied!'); }}
+                              className="text-gray-500 hover:text-purple-400 transition-colors"
+                              title="Copy ID"
+                            >
+                              <Copy className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )}
                         <div className="flex items-center gap-4 mt-3 pt-3 border-t border-white/5">
                           <div>
                             <p className="text-xs text-gray-400">Playlists</p>
@@ -1077,6 +1228,10 @@ export default function Dashboard() {
                           <div>
                             <p className="text-xs text-gray-400">Liked Songs</p>
                             <p className="text-sm font-bold text-pink-400">{likedSongs.size}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-400">Friends</p>
+                            <p className="text-sm font-bold text-green-400">{friends.length}</p>
                           </div>
                         </div>
                       </div>
@@ -1123,6 +1278,7 @@ export default function Dashboard() {
               {activeTab === 'home' && 'Your Music Library'}
               {activeTab === 'liked' && 'Liked Songs'}
               {activeTab === 'playlists' && 'Your Playlists'}
+              {activeTab === 'friends' && 'Friends'}
             </h1>
             {activeTab === 'home' && (
               <p className="text-gray-400">
@@ -1424,6 +1580,253 @@ export default function Dashboard() {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </motion.div>
+          ) : activeTab === 'friends' ? (
+            <motion.div
+              key="friends"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              {/* Friend Viewing - their playlists */}
+              {viewingFriend ? (
+                <div>
+                  <button
+                    onClick={() => { setViewingFriend(null); setFriendPlaylists([]); }}
+                    className="mb-6 flex items-center gap-2 px-4 py-2 bg-white/5 text-white rounded-lg hover:bg-white/10 transition-all"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Back to Friends
+                  </button>
+                  <div className="flex items-center gap-4 mb-6">
+                    <div className="w-14 h-14 rounded-full bg-gradient-to-br from-green-500 to-teal-500 flex items-center justify-center">
+                      <User className="w-7 h-7 text-white" />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-bold text-white">{viewingFriend.username}</h2>
+                      <p className="text-gray-400 text-sm">ID: #{viewingFriend.unique_code}</p>
+                    </div>
+                  </div>
+                  <h3 className="text-lg font-semibold text-white mb-4">Their Playlists</h3>
+                  {friendPlaylists.length === 0 ? (
+                    <div className="text-gray-400 text-center py-12">No public playlists yet</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {friendPlaylists.map((playlist: any) => (
+                        <div key={playlist.id} className="flex items-center justify-between p-4 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-all">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-teal-500 flex items-center justify-center">
+                              <ListMusic className="w-5 h-5 text-white" />
+                            </div>
+                            <div>
+                              <p className="text-white font-medium">{playlist.name}</p>
+                              <p className="text-gray-400 text-sm">{playlist.song_count || 0} songs</p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setShowCopyPlaylistModal(playlist);
+                              setCopyPlaylistName(playlist.name);
+                            }}
+                            className="px-4 py-2 bg-purple-500/20 text-purple-300 text-sm rounded-lg hover:bg-purple-500/30 transition-all border border-purple-500/30 flex items-center gap-2"
+                          >
+                            <Plus className="w-4 h-4" /> Add to Library
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  {/* Sub-tabs */}
+                  <div className="flex gap-2 mb-6 bg-white/5 p-1 rounded-xl w-fit">
+                    {(['list', 'add', 'requests'] as const).map(tab => (
+                      <button
+                        key={tab}
+                        onClick={() => setFriendsTab(tab)}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all relative ${
+                          friendsTab === tab
+                            ? 'bg-purple-500/40 text-white'
+                            : 'text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        {tab === 'list' && 'My Friends'}
+                        {tab === 'add' && 'Add Friend'}
+                        {tab === 'requests' && (
+                          <span className="flex items-center gap-2">
+                            Requests
+                            {friendRequestCount > 0 && (
+                              <span className="bg-pink-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                                {friendRequestCount}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* My Friends list */}
+                  {friendsTab === 'list' && (
+                    <div>
+                      {friends.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-20 text-center">
+                          <Users className="w-16 h-16 text-gray-600 mb-4" />
+                          <h3 className="text-white text-xl font-semibold mb-2">No Friends Yet</h3>
+                          <p className="text-gray-400">Add friends using their unique ID</p>
+                          <button
+                            onClick={() => setFriendsTab('add')}
+                            className="mt-4 px-6 py-2 bg-purple-500/20 text-purple-300 rounded-lg hover:bg-purple-500/30 transition-all border border-purple-500/30"
+                          >
+                            Add a Friend
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {friends.map((friend: any) => (
+                            <div
+                              key={friend.id}
+                              className="flex items-center justify-between p-4 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-all group"
+                            >
+                              <div className="flex items-center gap-4">
+                                <div className="relative">
+                                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                                    <User className="w-6 h-6 text-white" />
+                                  </div>
+                                  {friend.is_online && (
+                                    <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-black" />
+                                  )}
+                                </div>
+                                <div>
+                                  <p className="text-white font-semibold">{friend.username}</p>
+                                  <p className="text-gray-400 text-sm">ID: #{friend.unique_code}</p>
+                                </div>
+                              </div>
+                              <button
+                                onClick={async () => {
+                                  setViewingFriend(friend);
+                                  const res = await fetch(`/api/friends/${friend.id}/playlists`);
+                                  const data = await res.json();
+                                  if (data.success) setFriendPlaylists(data.playlists || []);
+                                }}
+                                className="px-4 py-2 bg-white/5 text-gray-300 text-sm rounded-lg hover:bg-white/10 hover:text-white transition-all border border-white/10 flex items-center gap-2"
+                              >
+                                <ListMusic className="w-4 h-4" /> View Playlists
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Add Friend */}
+                  {friendsTab === 'add' && (
+                    <div className="max-w-md">
+                      <p className="text-gray-400 mb-6">Enter your friend's unique 4-digit ID to send them a friend request.</p>
+                      <div className="flex gap-3">
+                        <div className="flex-1 relative">
+                          <UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                          <input
+                            type="text"
+                            value={addFriendCode}
+                            onChange={(e) => setAddFriendCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                            placeholder="Enter 4-digit ID..."
+                            maxLength={4}
+                            className="w-full pl-12 pr-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 tracking-widest font-mono text-lg"
+                          />
+                        </div>
+                        <button
+                          onClick={async () => {
+                            if (addFriendCode.length !== 4) {
+                              showNotification('error', 'Enter a valid 4-digit ID');
+                              return;
+                            }
+                            const res = await fetch('/api/friends/requests', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ unique_code: addFriendCode })
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                              showNotification('success', 'Friend request sent!');
+                              setAddFriendCode('');
+                            } else {
+                              showNotification('error', data.error || 'Failed to send request');
+                            }
+                          }}
+                          className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-medium hover:shadow-lg hover:shadow-purple-500/30 transition-all"
+                        >
+                          Send Request
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Friend Requests */}
+                  {friendsTab === 'requests' && (
+                    <div>
+                      {friendRequests.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-20 text-center">
+                          <Bell className="w-16 h-16 text-gray-600 mb-4" />
+                          <h3 className="text-white text-xl font-semibold mb-2">No Pending Requests</h3>
+                          <p className="text-gray-400">Friend requests will appear here</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {friendRequests.map((req: any) => (
+                            <div key={req.id} className="flex items-center justify-between p-4 bg-white/5 border border-white/10 rounded-xl">
+                              <div className="flex items-center gap-4">
+                                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
+                                  <User className="w-6 h-6 text-white" />
+                                </div>
+                                <div>
+                                  <p className="text-white font-semibold">{req.sender?.username || 'Unknown'}</p>
+                                  <p className="text-gray-400 text-sm">ID: #{req.sender?.unique_code}</p>
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={async () => {
+                                    const res = await fetch(`/api/friends/requests/${req.id}/accept`, { method: 'POST' });
+                                    const data = await res.json();
+                                    if (data.success) {
+                                      showNotification('success', `${req.sender?.username} is now your friend!`);
+                                      fetchFriends();
+                                    }
+                                  }}
+                                  className="w-10 h-10 bg-green-500/20 text-green-400 rounded-lg flex items-center justify-center hover:bg-green-500/40 transition-all border border-green-500/30"
+                                  title="Accept"
+                                >
+                                  <Check className="w-5 h-5" />
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    const res = await fetch(`/api/friends/requests/${req.id}/reject`, { method: 'POST' });
+                                    const data = await res.json();
+                                    if (data.success) {
+                                      showNotification('info', 'Request rejected');
+                                      fetchFriends();
+                                    }
+                                  }}
+                                  className="w-10 h-10 bg-red-500/20 text-red-400 rounded-lg flex items-center justify-center hover:bg-red-500/40 transition-all border border-red-500/30"
+                                  title="Reject"
+                                >
+                                  <X className="w-5 h-5" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </motion.div>
@@ -1735,13 +2138,39 @@ export default function Dashboard() {
                   </button>
 
                   <button
-                    onClick={() => setShowCustomLoop(!showCustomLoop)}
+                    onClick={() => {
+                      // Fix: use context-aware source
+                      if (activeTab === 'liked') {
+                        const liked = songs.filter(s => likedSongs.has(s.id));
+                        setCustomLoopSource(liked);
+                      } else if (selectedPlaylist && playlistSongs.length > 0) {
+                        setCustomLoopSource(playlistSongs);
+                      } else {
+                        setCustomLoopSource(currentQueue.length > 0 ? currentQueue : songs);
+                      }
+                      setCustomLoopSearch('');
+                      setShowCustomLoop(!showCustomLoop);
+                    }}
                     className={`transition-colors ${
                       isCustomLoopActive ? 'text-purple-400' : 'text-gray-400 hover:text-white'
                     }`}
                     title={isCustomLoopActive ? `Custom Loop (${customLoopQueue.length} songs)` : 'Custom Loop'}
                   >
                     <List className="w-4 h-4" />
+                  </button>
+
+                  {/* Vibe Loop Button */}
+                  <button
+                    onClick={() => setShowVibeLoop(true)}
+                    className={`transition-colors relative ${
+                      isVibeLoopActive ? 'text-orange-400' : 'text-gray-400 hover:text-white'
+                    }`}
+                    title="Vibe Loop – loop a segment"
+                  >
+                    <Scissors className="w-4 h-4" />
+                    {isVibeLoopActive && (
+                      <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-400 rounded-full animate-pulse" />
+                    )}
                   </button>
                 </div>
 
@@ -2068,7 +2497,7 @@ export default function Dashboard() {
 
       {/* Custom Loop Modal */}
       <AnimatePresence>
-        {showCustomLoop && currentQueue.length > 0 && (
+        {showCustomLoop && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -2076,9 +2505,7 @@ export default function Dashboard() {
             className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
             onClick={() => {
               setShowCustomLoop(false);
-              if (!isCustomLoopActive) {
-                setCustomLoopSelection(new Set());
-              }
+              if (!isCustomLoopActive) setCustomLoopSelection(new Set());
             }}
           >
             <motion.div
@@ -2088,14 +2515,24 @@ export default function Dashboard() {
               onClick={(e) => e.stopPropagation()}
               className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-2xl p-8 max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col"
             >
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-4">
                 <div>
                   <h2 className="text-2xl font-bold text-white">Custom Loop</h2>
                   <p className="text-gray-400 text-sm mt-1">
                     {isCustomLoopActive ? `Looping ${customLoopQueue.length} selected songs` :
-                     `Select songs to loop Ã¢â‚¬Â¢ ${selectedPlaylist ? selectedPlaylist.name :
-                     activeTab === 'liked' ? 'Liked Songs' : 'All Songs'} (${currentQueue.length} songs)`}
+                     `Select from: ${selectedPlaylist ? selectedPlaylist.name : activeTab === 'liked' ? 'Liked Songs' : 'All Songs'} (${customLoopSource.length} songs)`}
                   </p>
+                </div>
+                {/* Search inside custom loop */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={customLoopSearch}
+                    onChange={e => setCustomLoopSearch(e.target.value)}
+                    placeholder="Search..."
+                    className="pl-9 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                  />
                 </div>
                 <button
                   onClick={() => {
@@ -2112,8 +2549,10 @@ export default function Dashboard() {
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto space-y-2 mb-4">
-                {currentQueue.map((song, index) => (
+              <div className="flex-1 overflow-y-auto space-y-2 mb-4 mt-4">
+                {(customLoopSource.length > 0 ? customLoopSource : currentQueue)
+                  .filter(song => customLoopSearch === '' || song.title.toLowerCase().includes(customLoopSearch.toLowerCase()) || song.artist.toLowerCase().includes(customLoopSearch.toLowerCase()))
+                  .map((song, index) => (
                   <motion.div
                     key={song.id}
                     initial={{ opacity: 0, x: -20 }}
@@ -2187,23 +2626,24 @@ export default function Dashboard() {
                       {song.duration}
                     </div>
                   </motion.div>
-                ))}
+                  ))}
               </div>
 
               {!isCustomLoopActive && (
                 <div className="flex gap-3 pt-4 border-t border-white/10">
                   <button
                     onClick={() => {
-                      const allSelected = customLoopSelection.size === currentQueue.length;
+                      const src = customLoopSource.length > 0 ? customLoopSource : currentQueue;
+                      const allSelected = customLoopSelection.size === src.length;
                       if (allSelected) {
                         setCustomLoopSelection(new Set());
                       } else {
-                        setCustomLoopSelection(new Set(currentQueue.map(s => s.id)));
+                        setCustomLoopSelection(new Set(src.map(s => s.id)));
                       }
                     }}
                     className="px-4 py-2 bg-white/5 text-gray-300 rounded-lg text-sm hover:bg-white/10 transition-all border border-white/10"
                   >
-                    {customLoopSelection.size === currentQueue.length ? 'Deselect All' : 'Select All'}
+                    {customLoopSelection.size === (customLoopSource.length > 0 ? customLoopSource : currentQueue).length ? 'Deselect All' : 'Select All'}
                   </button>
                   <button
                     onClick={() => {
@@ -2211,7 +2651,8 @@ export default function Dashboard() {
                         showNotification('error', 'Please select at least one song');
                         return;
                       }
-                      const selectedSongs = currentQueue.filter(s => customLoopSelection.has(s.id));
+                      const src = customLoopSource.length > 0 ? customLoopSource : currentQueue;
+                      const selectedSongs = src.filter(s => customLoopSelection.has(s.id));
                       setCustomLoopQueue(selectedSongs);
                       setIsCustomLoopActive(true);
 
@@ -2258,6 +2699,237 @@ export default function Dashboard() {
                   </button>
                 </div>
               )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Vibe Loop Modal */}
+      <AnimatePresence>
+        {showVibeLoop && currentSong && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
+            onClick={() => setShowVibeLoop(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-gradient-to-br from-gray-900 to-black border border-orange-500/30 rounded-2xl p-8 max-w-lg w-full mx-4"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                    <Scissors className="w-6 h-6 text-orange-400" />
+                    Vibe Loop
+                  </h2>
+                  <p className="text-gray-400 text-sm mt-1">Select the part you want to loop</p>
+                </div>
+                <button onClick={() => setShowVibeLoop(false)} className="text-gray-400 hover:text-white">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="mb-4">
+                <p className="text-white font-medium truncate">{currentSong.title}</p>
+                <p className="text-gray-400 text-sm">{currentSong.artist}</p>
+              </div>
+
+              {/* Segment bar */}
+              <div className="mb-8 mt-4">
+                <style>{`
+                  .vibe-track {
+                    position: relative;
+                    width: 100%;
+                    height: 8px;
+                    background: rgba(255,255,255,0.1);
+                    border-radius: 9999px;
+                  }
+                  .vibe-slider {
+                    -webkit-appearance: none;
+                    appearance: none;
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 8px;
+                    background: transparent;
+                    pointer-events: none;
+                    z-index: 20;
+                  }
+                  .vibe-slider::-webkit-slider-thumb {
+                    -webkit-appearance: none;
+                    appearance: none;
+                    pointer-events: auto;
+                    width: 24px;
+                    height: 24px;
+                    background: #f97316;
+                    border-radius: 50%;
+                    cursor: pointer;
+                    margin-top: -8px;
+                    box-shadow: 0 0 10px rgba(249,115,22,0.8);
+                  }
+                  .vibe-slider::-moz-range-thumb {
+                    pointer-events: auto;
+                    width: 24px;
+                    height: 24px;
+                    background: #f97316;
+                    border-radius: 50%;
+                    cursor: pointer;
+                    border: none;
+                    box-shadow: 0 0 10px rgba(249,115,22,0.8);
+                  }
+                `}</style>
+
+                <div className="vibe-track mb-6">
+                  {/* Selected region highlight */}
+                  <div
+                    className="absolute top-0 h-full bg-orange-500/40 border-x-2 border-orange-400 rounded-sm z-10"
+                    style={{ left: `${vibeLoopStart}%`, width: `${vibeLoopEnd - vibeLoopStart}%` }}
+                  />
+
+                  {/* Start handle */}
+                  <input
+                    type="range" min="0" max="99" step="0.5"
+                    value={vibeLoopStart}
+                    onChange={(e) => {
+                      const val = Math.min(Number(e.target.value), vibeLoopEnd - 1);
+                      setVibeLoopStart(val);
+                      if (audioRef.current && audioRef.current.duration) {
+                        audioRef.current.currentTime = (val / 100) * audioRef.current.duration;
+                        if (!isPlaying) {
+                           audioRef.current.play().catch(console.error);
+                           setIsPlaying(true);
+                        }
+                      }
+                    }}
+                    className="vibe-slider"
+                  />
+
+                  {/* End handle */}
+                  <input
+                    type="range" min="1" max="100" step="0.5"
+                    value={vibeLoopEnd}
+                    onChange={(e) => {
+                      const val = Math.max(Number(e.target.value), vibeLoopStart + 1);
+                      setVibeLoopEnd(val);
+                      if (audioRef.current && audioRef.current.duration) {
+                        audioRef.current.currentTime = (val / 100) * audioRef.current.duration;
+                        if (!isPlaying) {
+                           audioRef.current.play().catch(console.error);
+                           setIsPlaying(true);
+                        }
+                      }
+                    }}
+                    className="vibe-slider"
+                  />
+                </div>
+                
+                <div className="flex justify-between text-xs text-gray-400 mt-6 px-1">
+                  <span>Start: {vibeLoopStart.toFixed(0)}%</span>
+                  <span className="text-orange-400 font-bold">Loop region: {(vibeLoopEnd - vibeLoopStart).toFixed(0)}%</span>
+                  <span>End: {vibeLoopEnd.toFixed(0)}%</span>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                {isVibeLoopActive && (
+                  <button
+                    onClick={() => {
+                      setIsVibeLoopActive(false);
+                      setShowVibeLoop(false);
+                      showNotification('info', 'Vibe Loop deactivated');
+                    }}
+                    className="flex-1 px-4 py-3 bg-red-500/20 text-red-300 rounded-lg font-medium hover:bg-red-500/30 transition-all border border-red-500/50"
+                  >
+                    Stop Vibe Loop
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    // Seek to start point
+                    if (audioRef.current && audioRef.current.duration) {
+                      audioRef.current.currentTime = (vibeLoopStart / 100) * audioRef.current.duration;
+                    }
+                    setIsVibeLoopActive(true);
+                    if (!isPlaying) setIsPlaying(true);
+                    setShowVibeLoop(false);
+                    showNotification('success', 'Vibe Loop activated!');
+                  }}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-orange-500 to-pink-500 text-white rounded-lg font-medium hover:shadow-lg hover:shadow-orange-500/30 transition-all"
+                >
+                  🎵 Activate Vibe Loop
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Friends — Copy Playlist Modal */}
+      <AnimatePresence>
+        {showCopyPlaylistModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
+            onClick={() => setShowCopyPlaylistModal(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-2xl p-8 max-w-md w-full mx-4"
+            >
+              <h2 className="text-2xl font-bold text-white mb-2">Copy Playlist</h2>
+              <p className="text-gray-400 text-sm mb-6">Give this playlist a name in your library</p>
+              <input
+                type="text"
+                value={copyPlaylistName}
+                onChange={(e) => setCopyPlaylistName(e.target.value)}
+                placeholder={showCopyPlaylistModal?.name || 'My Playlist'}
+                className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 mb-6"
+                autoFocus
+              />
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowCopyPlaylistModal(null)}
+                  className="flex-1 px-4 py-3 bg-white/5 text-white rounded-lg font-medium hover:bg-white/10 border border-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    const name = copyPlaylistName.trim() || showCopyPlaylistModal?.name;
+                    if (!name || !user) return;
+                    // Create new playlist
+                    const { data: newPl, error: plErr } = await supabase
+                      .from('playlists').insert([{ name, custom_user_id: user.id }]).select().single();
+                    if (plErr || !newPl) { showNotification('error', 'Failed to create playlist'); return; }
+                    // Copy songs
+                    const songRes = await fetch(`/api/friends/${viewingFriend?.id}/playlists/${showCopyPlaylistModal.id}/songs`);
+                    const songData = await songRes.json();
+                    if (songData.songs && songData.songs.length > 0) {
+                      await supabase.from('playlist_songs').insert(
+                        songData.songs.map((s: any) => ({ playlist_id: newPl.id, song_id: s.id }))
+                      );
+                    }
+                    showNotification('success', `Playlist "${name}" added to your library!`);
+                    fetchPlaylists();
+                    setShowCopyPlaylistModal(null);
+                    setCopyPlaylistName('');
+                  }}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg font-medium"
+                >
+                  Add to My Library
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}

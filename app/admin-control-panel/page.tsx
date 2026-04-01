@@ -638,6 +638,8 @@ export default function AdminPanel() {
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Username</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Password</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Online</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Unique ID</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Status</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Joined</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Actions</th>
@@ -654,6 +656,28 @@ export default function AdminPanel() {
                         </td>
                         <td className="px-6 py-4">
                           <p className="text-yellow-400 font-mono text-lg font-bold">{user.password}</p>
+                        </td>
+                        <td className="px-6 py-4">
+                          {/* Online status dot */}
+                          {(() => {
+                            const isOnline = user.last_seen && (Date.now() - new Date(user.last_seen).getTime()) < 90000;
+                            return isOnline ? (
+                              <div className="flex items-center gap-2">
+                                <span className="w-3 h-3 bg-green-500 rounded-full animate-pulse shadow-lg shadow-green-500/50" />
+                                <span className="text-green-400 text-xs font-medium">Online</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <span className="w-3 h-3 bg-gray-600 rounded-full" />
+                                <span className="text-gray-500 text-xs">
+                                  {user.last_seen ? `${Math.round((Date.now() - new Date(user.last_seen).getTime()) / 60000)}m ago` : 'Never'}
+                                </span>
+                              </div>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-purple-400 font-mono font-bold tracking-widest text-lg">#{user.unique_code || '----'}</span>
                         </td>
                         <td className="px-6 py-4">
                           {user.is_blocked ? (

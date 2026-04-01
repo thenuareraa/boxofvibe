@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
     // Get user
     const { data: user, error: userError } = await supabase
       .from('custom_users')
-      .select('id, email, username, created_at, last_login, is_blocked')
+      .select('id, email, username, created_at, last_login, is_blocked, unique_code')
       .eq('id', session.user_id)
       .single();
 
