@@ -2741,51 +2741,7 @@ export default function Dashboard() {
 
               {/* Segment bar */}
               <div className="mb-8 mt-4">
-                <style>{`
-                  .vibe-track {
-                    position: relative;
-                    width: 100%;
-                    height: 8px;
-                    background: rgba(255,255,255,0.1);
-                    border-radius: 9999px;
-                  }
-                  .vibe-slider {
-                    -webkit-appearance: none;
-                    appearance: none;
-                    position: absolute;
-                    top: 0;
-                    left: 0;
-                    width: 100%;
-                    height: 8px;
-                    background: transparent;
-                    pointer-events: none;
-                    z-index: 20;
-                  }
-                  .vibe-slider::-webkit-slider-thumb {
-                    -webkit-appearance: none;
-                    appearance: none;
-                    pointer-events: auto;
-                    width: 24px;
-                    height: 24px;
-                    background: #f97316;
-                    border-radius: 50%;
-                    cursor: pointer;
-                    margin-top: -8px;
-                    box-shadow: 0 0 10px rgba(249,115,22,0.8);
-                  }
-                  .vibe-slider::-moz-range-thumb {
-                    pointer-events: auto;
-                    width: 24px;
-                    height: 24px;
-                    background: #f97316;
-                    border-radius: 50%;
-                    cursor: pointer;
-                    border: none;
-                    box-shadow: 0 0 10px rgba(249,115,22,0.8);
-                  }
-                `}</style>
-
-                <div className="vibe-track mb-6">
+                <div className="relative w-full h-2 bg-white/10 rounded-full mb-6">
                   {/* Selected region highlight */}
                   <div
                     className="absolute top-0 h-full bg-orange-500/40 border-x-2 border-orange-400 rounded-sm z-10"
@@ -2807,7 +2763,7 @@ export default function Dashboard() {
                         }
                       }
                     }}
-                    className="vibe-slider"
+                    className="absolute top-0 left-0 w-full h-2 appearance-none bg-transparent pointer-events-none z-20 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-orange-500 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-[0_0_10px_rgba(249,115,22,0.8)] [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:w-6 [&::-moz-range-thumb]:h-6 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-none [&::-moz-range-thumb]:bg-orange-500 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:shadow-[0_0_10px_rgba(249,115,22,0.8)] [&::-moz-range-track]:bg-transparent [&::-webkit-slider-runnable-track]:bg-transparent"
                   />
 
                   {/* End handle */}
@@ -2825,7 +2781,7 @@ export default function Dashboard() {
                         }
                       }
                     }}
-                    className="vibe-slider"
+                    className="absolute top-0 left-0 w-full h-2 appearance-none bg-transparent pointer-events-none z-20 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-orange-500 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-[0_0_10px_rgba(249,115,22,0.8)] [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:w-6 [&::-moz-range-thumb]:h-6 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-none [&::-moz-range-thumb]:bg-orange-500 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:shadow-[0_0_10px_rgba(249,115,22,0.8)] [&::-moz-range-track]:bg-transparent [&::-webkit-slider-runnable-track]:bg-transparent"
                   />
                 </div>
                 
