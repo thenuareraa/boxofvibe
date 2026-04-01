@@ -81,6 +81,8 @@ export default function Dashboard() {
   const [showVibeLoop, setShowVibeLoop] = useState(false);
   const [vibeLoopStart, setVibeLoopStart] = useState(0);
   const [vibeLoopEnd, setVibeLoopEnd] = useState(100);
+  const vibeTrackRef = useRef<HTMLDivElement>(null);
+  const [vibeDraggingHandle, setVibeDraggingHandle] = useState<'start' | 'end' | null>(null);
   const [isVibeLoopActive, setIsVibeLoopActive] = useState(false);
   // Friends state
   const [friendsTab, setFriendsTab] = useState<'list'|'add'|'requests'>('list');
@@ -2741,56 +2743,85 @@ export default function Dashboard() {
 
               {/* Segment bar */}
               <div className="mb-8 mt-4">
-                <div className="relative w-full h-2 bg-white/10 rounded-full mb-6">
-                  {/* Selected region highlight */}
+                <div 
+                  className="relative w-full h-8 flex items-center cursor-pointer touch-none select-none mb-4"
+                  ref={vibeTrackRef}
+                  onPointerDown={(e) => {
+                    if (!vibeTrackRef.current) return;
+                    const rect = vibeTrackRef.current.getBoundingClientRect();
+                    const percent = ((e.clientX - rect.left) / rect.width) * 100;
+                    // Determine which handle is closer
+                    const distStart = Math.abs(percent - vibeLoopStart);
+                    const distEnd = Math.abs(percent - vibeLoopEnd);
+                    setVibeDraggingHandle(distStart < distEnd ? 'start' : 'end');
+                  }}
+                  onPointerMove={(e) => {
+                    if (!vibeDraggingHandle || !vibeTrackRef.current) return;
+                    const rect = vibeTrackRef.current.getBoundingClientRect();
+                    let percent = ((e.clientX - rect.left) / rect.width) * 100;
+                    percent = Math.max(0, Math.min(100, Math.round(percent * 2) / 2));
+                    
+                    if (vibeDraggingHandle === 'start') {
+                      setVibeLoopStart(Math.min(percent, vibeLoopEnd - 1));
+                    } else {
+                      setVibeLoopEnd(Math.max(percent, vibeLoopStart + 1));
+                    }
+                    
+                    if (audioRef.current && audioRef.current.duration) {
+                      const val = vibeDraggingHandle === 'start' ? Math.min(percent, vibeLoopEnd - 1) : Math.max(percent, vibeLoopStart + 1);
+                      audioRef.current.currentTime = (val / 100) * audioRef.current.duration;
+                    }
+                  }}
+                  onPointerUp={() => {
+                    if (vibeDraggingHandle) {
+                      setVibeDraggingHandle(null);
+                      if (audioRef.current && !isPlaying) {
+                         audioRef.current.play().catch(console.error);
+                         setIsPlaying(true);
+                      }
+                    }
+                  }}
+                  onPointerLeave={() => {
+                    if (vibeDraggingHandle) {
+                      setVibeDraggingHandle(null);
+                      if (audioRef.current && !isPlaying) {
+                         audioRef.current.play().catch(console.error);
+                         setIsPlaying(true);
+                      }
+                    }
+                  }}
+                >
+                  {/* Track base */}
+                  <div className="absolute w-full h-2 bg-white/10 rounded-full" />
+                  
+                  {/* Highlight */}
                   <div
-                    className="absolute top-0 h-full bg-orange-500/40 border-x-2 border-orange-400 rounded-sm z-10"
+                    className="absolute h-2 bg-orange-500/80 pointer-events-none"
                     style={{ left: `${vibeLoopStart}%`, width: `${vibeLoopEnd - vibeLoopStart}%` }}
                   />
 
-                  {/* Start handle */}
-                  <input
-                    type="range" min="0" max="99" step="0.5"
-                    value={vibeLoopStart}
-                    onChange={(e) => {
-                      const val = Math.min(Number(e.target.value), vibeLoopEnd - 1);
-                      setVibeLoopStart(val);
-                      if (audioRef.current && audioRef.current.duration) {
-                        audioRef.current.currentTime = (val / 100) * audioRef.current.duration;
-                        if (!isPlaying) {
-                           audioRef.current.play().catch(console.error);
-                           setIsPlaying(true);
-                        }
-                      }
-                    }}
-                    className="absolute top-0 left-0 w-full h-2 appearance-none bg-transparent pointer-events-none z-20 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-orange-500 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-[0_0_10px_rgba(249,115,22,0.8)] [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:w-6 [&::-moz-range-thumb]:h-6 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-none [&::-moz-range-thumb]:bg-orange-500 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:shadow-[0_0_10px_rgba(249,115,22,0.8)] [&::-moz-range-track]:bg-transparent [&::-webkit-slider-runnable-track]:bg-transparent"
+                  {/* Start Thumb */}
+                  <div
+                    onPointerDown={(e) => { e.stopPropagation(); setVibeDraggingHandle('start'); }}
+                    className={`absolute w-6 h-6 bg-white border-[6px] border-orange-500 rounded-full shadow-[0_0_10px_rgba(249,115,22,0.8)] -ml-3 transition-transform ${vibeDraggingHandle === 'start' ? 'scale-125' : 'hover:scale-110'}`}
+                    style={{ left: `${vibeLoopStart}%` }}
                   />
 
-                  {/* End handle */}
-                  <input
-                    type="range" min="1" max="100" step="0.5"
-                    value={vibeLoopEnd}
-                    onChange={(e) => {
-                      const val = Math.max(Number(e.target.value), vibeLoopStart + 1);
-                      setVibeLoopEnd(val);
-                      if (audioRef.current && audioRef.current.duration) {
-                        audioRef.current.currentTime = (val / 100) * audioRef.current.duration;
-                        if (!isPlaying) {
-                           audioRef.current.play().catch(console.error);
-                           setIsPlaying(true);
-                        }
-                      }
-                    }}
-                    className="absolute top-0 left-0 w-full h-2 appearance-none bg-transparent pointer-events-none z-20 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-orange-500 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-[0_0_10px_rgba(249,115,22,0.8)] [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:w-6 [&::-moz-range-thumb]:h-6 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-none [&::-moz-range-thumb]:bg-orange-500 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:shadow-[0_0_10px_rgba(249,115,22,0.8)] [&::-moz-range-track]:bg-transparent [&::-webkit-slider-runnable-track]:bg-transparent"
+                  {/* End Thumb */}
+                  <div
+                    onPointerDown={(e) => { e.stopPropagation(); setVibeDraggingHandle('end'); }}
+                    className={`absolute w-6 h-6 bg-white border-[6px] border-orange-500 rounded-full shadow-[0_0_10px_rgba(249,115,22,0.8)] -ml-3 transition-transform ${vibeDraggingHandle === 'end' ? 'scale-125' : 'hover:scale-110'}`}
+                    style={{ left: `${vibeLoopEnd}%` }}
                   />
                 </div>
                 
-                <div className="flex justify-between text-xs text-gray-400 mt-6 px-1">
-                  <span>Start: {vibeLoopStart.toFixed(0)}%</span>
-                  <span className="text-orange-400 font-bold">Loop region: {(vibeLoopEnd - vibeLoopStart).toFixed(0)}%</span>
-                  <span>End: {vibeLoopEnd.toFixed(0)}%</span>
+                <div className="flex justify-between text-xs text-gray-400 mt-2 px-1 text-center font-mono">
+                  <span className="w-16 text-left">START<br/><b className="text-white">{vibeLoopStart.toFixed(1)}%</b></span>
+                  <span className="text-orange-400 mt-2"><b>LOOPING {(vibeLoopEnd - vibeLoopStart).toFixed(1)}%</b></span>
+                  <span className="w-16 text-right">END<br/><b className="text-white">{vibeLoopEnd.toFixed(1)}%</b></span>
                 </div>
               </div>
+
 
               <div className="flex gap-3">
                 {isVibeLoopActive && (
