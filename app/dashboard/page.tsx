@@ -111,6 +111,7 @@ export default function Dashboard() {
   const [vibeSearch, setVibeSearch] = useState('');
   const [vibeSongToAdd, setVibeSongToAdd] = useState<Song | null>(null);
   const [vibeDragIndex, setVibeDragIndex] = useState<number | null>(null);
+  const [dismissedInvites, setDismissedInvites] = useState<Set<number>>(new Set());
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -320,17 +321,19 @@ export default function Dashboard() {
   };
 
   const acceptVibeInvite = async (sessionId: number) => {
+    const invite = vibeInvites.find(v => v.session_id === sessionId);
+    if (!invite) return;
     const res = await fetch('/api/vibe/join', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionCode: vibeInvites.find(v => v.session_id === sessionId)?.session_code })
+      body: JSON.stringify({ sessionCode: invite.session_code })
     });
     const data = await res.json();
     if (data.success) {
       setVibeSession(data.session);
       setVibeInvites(prev => prev.filter(v => v.session_id !== sessionId));
+      setDismissedInvites(prev => new Set(prev).add(sessionId));
       loadVibeSession(data.session.id);
-      showNotification('success', 'Joined the vibe!');
     }
   };
 
@@ -421,11 +424,10 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [vibeSession]);
 
-  // Poll for vibe invites when not in a session
+  // Poll for vibe invites when not in a session (only once per invite)
   useEffect(() => {
     if (vibeSession || !user) return;
     const interval = setInterval(async () => {
-      // Check all active sessions for pending invites
       const { data: allSessions } = await supabase
         .from('vibe_sessions')
         .select('id, session_code, host_id, status')
@@ -433,6 +435,8 @@ export default function Dashboard() {
       
       if (allSessions) {
         for (const session of allSessions) {
+          if (dismissedInvites.has(session.id)) continue;
+          
           const { data: invite } = await supabase
             .from('vibe_invites')
             .select('id')
@@ -441,7 +445,7 @@ export default function Dashboard() {
             .eq('status', 'pending')
             .single();
           
-          if (invite && !vibeInvites.find(v => v.session_id === session.id)) {
+          if (invite) {
             const { data: host } = await supabase
               .from('custom_users')
               .select('username')
@@ -449,14 +453,16 @@ export default function Dashboard() {
               .single();
             
             const newInvite = { session_id: session.id, session_code: session.session_code, host_name: host?.username };
-            setVibeInvites(prev => [...prev, newInvite]);
-            showNotification('info', `${host?.username} invited you to a Vibe Session! Code: ${session.session_code}`);
+            setVibeInvites(prev => {
+              if (prev.find(v => v.session_id === session.id)) return prev;
+              return [...prev, newInvite];
+            });
           }
         }
       }
-    }, 5000);
+    }, 10000);
     return () => clearInterval(interval);
-  }, [vibeSession, user]);
+  }, [vibeSession, user, dismissedInvites]);
 
   // Vibe sync: host controls audio, members sync to host
   useEffect(() => {

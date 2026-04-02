@@ -33,19 +33,23 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ success: false, error: 'Not friends with this user' }, { status: 403 });
   }
 
-  // Get friend's playlists with song count in a single query
-  const { data: playlists } = await supabase
-    .from('playlists')
-    .select('id, name, created_at, playlist_songs(count)')
-    .eq('custom_user_id', friendId)
-    .order('created_at', { ascending: false });
+  // Use RPC for fast single-query count
+  const { data: playlists, error } = await supabase.rpc('get_user_playlists_with_counts', { target_user_id: friendId });
 
-  const enriched = (playlists || []).map((pl: any) => ({
-    id: pl.id,
-    name: pl.name,
-    created_at: pl.created_at,
-    song_count: pl.playlist_songs?.[0]?.count || 0,
-  }));
+  if (error) {
+    // Fallback to simple query
+    const { data: simplePlaylists } = await supabase
+      .from('playlists')
+      .select('id, name, created_at')
+      .eq('custom_user_id', friendId)
+      .order('created_at', { ascending: false });
 
-  return NextResponse.json({ success: true, playlists: enriched });
+    return NextResponse.json({ success: true, playlists: (simplePlaylists || []).map((pl: any) => ({
+      id: pl.id,
+      name: pl.name,
+      song_count: 0,
+    })) });
+  }
+
+  return NextResponse.json({ success: true, playlists: playlists || [] });
 }

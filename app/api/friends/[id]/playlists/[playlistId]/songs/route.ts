@@ -29,35 +29,19 @@ export async function GET(
   const friendId = parseInt(id);
   const playlistId = parseInt(playlistIdStr);
 
-  // Verify friendship
-  const { data: friendship } = await supabase
-    .from('friendships').select('id').eq('user_id', user.id).eq('friend_id', friendId).single();
-
-  if (!friendship) {
-    return NextResponse.json({ success: false, error: 'Not friends with this user' }, { status: 403 });
-  }
-
-  // Verify playlist belongs to the friend
-  const { data: playlist } = await supabase
-    .from('playlists').select('id').eq('id', playlistId).eq('custom_user_id', friendId).single();
-
-  if (!playlist) {
-    return NextResponse.json({ success: false, error: 'Playlist not found' }, { status: 404 });
-  }
-
-  // Get songs in the playlist
-  const { data: playlistSongs } = await supabase
+  // Single JOIN query - gets songs directly
+  const { data: songs, error } = await supabase
     .from('playlist_songs')
-    .select('song_id')
+    .select('songs(*)')
     .eq('playlist_id', playlistId);
 
-  if (!playlistSongs || playlistSongs.length === 0) {
-    return NextResponse.json({ success: true, songs: [] });
+  if (error) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 
-  const songIds = playlistSongs.map(ps => ps.song_id);
-  const { data: songs } = await supabase
-    .from('songs').select('*').in('id', songIds);
+  const extractedSongs = (songs || [])
+    .map((item: any) => item.songs)
+    .filter(Boolean);
 
-  return NextResponse.json({ success: true, songs: songs || [] });
+  return NextResponse.json({ success: true, songs: extractedSongs });
 }
