@@ -3082,7 +3082,7 @@ export default function Dashboard() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
-            className="fixed bottom-28 right-6 z-50"
+            className="fixed bottom-44 right-6 z-50"
           >
             <div className={`bg-gradient-to-br from-gray-900 to-black border rounded-xl p-4 shadow-lg max-w-sm ${
               notification.type === 'success'
