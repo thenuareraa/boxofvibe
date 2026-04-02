@@ -93,8 +93,22 @@ export default function Dashboard() {
   const [friendRequestCount, setFriendRequestCount] = useState(0);
   const [viewingFriend, setViewingFriend] = useState<any | null>(null);
   const [friendPlaylists, setFriendPlaylists] = useState<any[]>([]);
+  const [viewingFriendPlaylist, setViewingFriendPlaylist] = useState<any | null>(null);
+  const [friendPlaylistSongs, setFriendPlaylistSongs] = useState<Song[]>([]);
   const [showCopyPlaylistModal, setShowCopyPlaylistModal] = useState<any | null>(null);
   const [copyPlaylistName, setCopyPlaylistName] = useState('');
+  // Vibe Together state
+  const [vibeSession, setVibeSession] = useState<any | null>(null);
+  const [vibeMembers, setVibeMembers] = useState<any[]>([]);
+  const [vibeQueue, setVibeQueue] = useState<any[]>([]);
+  const [vibeCurrentSong, setVibeCurrentSong] = useState<Song | null>(null);
+  const [showVibeCreate, setShowVibeCreate] = useState(false);
+  const [showVibeJoin, setShowVibeJoin] = useState(false);
+  const [vibeJoinCode, setVibeJoinCode] = useState('');
+  const [vibeInviteFriends, setVibeInviteFriends] = useState<Set<number>>(new Set());
+  const [vibeInvites, setVibeInvites] = useState<any[]>([]);
+  const [vibeSearch, setVibeSearch] = useState('');
+  const [vibeSongToAdd, setVibeSongToAdd] = useState<Song | null>(null);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -263,6 +277,131 @@ export default function Dashboard() {
     }, 5000);
     return () => clearInterval(interval);
   }, [user, fetchFriends]);
+
+  // Vibe Together functions
+  const createVibeSession = async () => {
+    const res = await fetch('/api/vibe/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ friendIds: Array.from(vibeInviteFriends) })
+    });
+    const data = await res.json();
+    if (data.success) {
+      setVibeSession(data.session);
+      setShowVibeCreate(false);
+      setVibeInviteFriends(new Set());
+      loadVibeSession(data.session.id);
+      showNotification('success', `Session created! Code: ${data.session.session_code}`);
+    }
+  };
+
+  const joinVibeSession = async () => {
+    if (vibeJoinCode.length !== 4) {
+      showNotification('error', 'Enter a valid 4-digit code');
+      return;
+    }
+    const res = await fetch('/api/vibe/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionCode: vibeJoinCode })
+    });
+    const data = await res.json();
+    if (data.success) {
+      setVibeSession(data.session);
+      setShowVibeJoin(false);
+      setVibeJoinCode('');
+      loadVibeSession(data.session.id);
+      showNotification('success', 'Joined the vibe!');
+    } else {
+      showNotification('error', data.error || 'Failed to join');
+    }
+  };
+
+  const leaveVibeSession = async () => {
+    if (!vibeSession) return;
+    await fetch('/api/vibe/leave', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: vibeSession.id })
+    });
+    setVibeSession(null);
+    setVibeMembers([]);
+    setVibeQueue([]);
+    setVibeCurrentSong(null);
+    showNotification('info', 'Left the vibe session');
+  };
+
+  const loadVibeSession = async (sessionId: number) => {
+    const res = await fetch(`/api/vibe/${sessionId}`);
+    const data = await res.json();
+    if (data.success) {
+      setVibeMembers(data.members || []);
+      setVibeQueue(data.queue || []);
+      setVibeCurrentSong(data.currentSong);
+      if (data.session && data.session.status !== 'active') {
+        setVibeSession(null);
+        showNotification('info', 'Session has ended');
+      }
+    }
+  };
+
+  const addSongToVibeQueue = async (songId: number) => {
+    if (!vibeSession) return;
+    const res = await fetch(`/api/vibe/${vibeSession.id}/queue`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ songId })
+    });
+    const data = await res.json();
+    if (data.success) {
+      loadVibeSession(vibeSession.id);
+      showNotification('success', 'Added to vibe queue');
+    }
+  };
+
+  const removeSongFromVibeQueue = async (queueId: number) => {
+    if (!vibeSession) return;
+    const res = await fetch(`/api/vibe/${vibeSession.id}/queue/${queueId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      loadVibeSession(vibeSession.id);
+      showNotification('info', 'Removed from queue');
+    } else {
+      showNotification('error', data.error || 'Failed to remove');
+    }
+  };
+
+  const vibeControl = async (action: string, position?: number, songId?: number) => {
+    if (!vibeSession) return;
+    await fetch(`/api/vibe/${vibeSession.id}/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, position, songId })
+    });
+  };
+
+  // Polling for vibe session state
+  useEffect(() => {
+    if (!vibeSession) return;
+    const interval = setInterval(() => {
+      loadVibeSession(vibeSession.id);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [vibeSession]);
+
+  // Vibe sync: if session has a current song and is playing, sync audio
+  useEffect(() => {
+    if (!vibeSession || !vibeCurrentSong || !audioRef.current) return;
+    const audio = audioRef.current;
+    const targetTime = vibeSession.current_position || 0;
+    // Only seek if difference is more than 2 seconds
+    if (Math.abs(audio.currentTime - targetTime) > 2) {
+      audio.currentTime = targetTime;
+    }
+    if (vibeSession.is_playing !== isPlaying) {
+      setIsPlaying(vibeSession.is_playing);
+    }
+  }, [vibeSession?.current_position, vibeSession?.is_playing, vibeCurrentSong?.id]);
 
   const handleLogout = async () => {
     await fetch('/api/custom-auth/logout', { method: 'POST' });
@@ -864,6 +1003,14 @@ export default function Dashboard() {
       const songs = data?.map((ps: any) => ps.songs).filter(Boolean) || [];
       setPlaylistSongs(songs);
       addDebugLog(`SUCCESS: Loaded ${songs.length} songs`);
+    }
+  };
+
+  const loadFriendPlaylistSongs = async (friendId: number, playlistId: number) => {
+    const res = await fetch(`/api/friends/${friendId}/playlists/${playlistId}/songs`);
+    const data = await res.json();
+    if (data.success) {
+      setFriendPlaylistSongs(data.songs || []);
     }
   };
 
@@ -1608,10 +1755,10 @@ export default function Dashboard() {
               transition={{ duration: 0.2 }}
             >
               {/* Friend Viewing - their playlists */}
-              {viewingFriend ? (
+              {viewingFriend && !viewingFriendPlaylist ? (
                 <div>
                   <button
-                    onClick={() => { setViewingFriend(null); setFriendPlaylists([]); }}
+                    onClick={() => { setViewingFriend(null); setFriendPlaylists([]); setViewingFriendPlaylist(null); setFriendPlaylistSongs([]); }}
                     className="mb-6 flex items-center gap-2 px-4 py-2 bg-white/5 text-white rounded-lg hover:bg-white/10 transition-all"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1635,7 +1782,13 @@ export default function Dashboard() {
                     <div className="space-y-2">
                       {friendPlaylists.map((playlist: any) => (
                         <div key={playlist.id} className="flex items-center justify-between p-4 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-all">
-                          <div className="flex items-center gap-3">
+                          <div
+                            className="flex items-center gap-3 cursor-pointer flex-1"
+                            onClick={async () => {
+                              setViewingFriendPlaylist(playlist);
+                              await loadFriendPlaylistSongs(viewingFriend.id, playlist.id);
+                            }}
+                          >
                             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-teal-500 flex items-center justify-center">
                               <ListMusic className="w-5 h-5 text-white" />
                             </div>
@@ -1658,16 +1811,114 @@ export default function Dashboard() {
                     </div>
                   )}
                 </div>
+              ) : viewingFriend && viewingFriendPlaylist ? (
+                <div>
+                  <div className="flex items-center gap-2 mb-4">
+                    <button
+                      onClick={() => { setViewingFriendPlaylist(null); setFriendPlaylistSongs([]); }}
+                      className="flex items-center gap-2 px-4 py-2 bg-white/5 text-white rounded-lg hover:bg-white/10 transition-all"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                      Back to Playlists
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-4 mb-6">
+                    <div className="w-14 h-14 rounded-full bg-gradient-to-br from-green-500 to-teal-500 flex items-center justify-center">
+                      <ListMusic className="w-7 h-7 text-white" />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-bold text-white">{viewingFriendPlaylist.name}</h2>
+                      <p className="text-gray-400 text-sm">by {viewingFriend.username} • {friendPlaylistSongs.length} songs</p>
+                    </div>
+                  </div>
+                  {friendPlaylistSongs.length === 0 ? (
+                    <div className="text-gray-400 text-center py-12">No songs in this playlist</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {friendPlaylistSongs.map((song: Song, index: number) => (
+                        <motion.div
+                          key={song.id}
+                          initial={{ opacity: 0, x: -20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ duration: 0.2, delay: index * 0.03 }}
+                          className={`group flex items-center gap-4 p-3 rounded-lg cursor-pointer transition-all ${
+                            currentSong?.id === song.id
+                              ? 'bg-purple-500/20 border border-purple-500/50'
+                              : 'bg-white/5 hover:bg-white/10 border border-transparent'
+                          }`}
+                          onClick={() => {
+                            setCurrentSong(song);
+                            setCurrentQueue(friendPlaylistSongs);
+                            setQueueIndex(index);
+                            setIsPlaying(true);
+                          }}
+                        >
+                          <div className="flex-shrink-0 w-8 text-center">
+                            {currentSong?.id === song.id && isPlaying ? (
+                              <div className="w-3 h-3 bg-purple-500 rounded-full animate-pulse" />
+                            ) : (
+                              <span className="text-gray-400 text-sm group-hover:hidden">{index + 1}</span>
+                            )}
+                            {!(currentSong?.id === song.id && isPlaying) && (
+                              <Play className="w-4 h-4 text-white hidden group-hover:block mx-auto" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className={`font-medium truncate ${currentSong?.id === song.id ? 'text-purple-300' : 'text-white'}`}>
+                              {song.title}
+                            </p>
+                            <p className="text-gray-400 text-sm truncate">{song.artist}</p>
+                          </div>
+                          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleLike(song.id);
+                              }}
+                              className={`transition-colors ${likedSongs.has(song.id) ? 'text-pink-500' : 'text-gray-400 hover:text-pink-500'}`}
+                            >
+                              <Heart className={`w-4 h-4 ${likedSongs.has(song.id) ? 'fill-current' : ''}`} />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSongForPlaylistAdd(song);
+                                setSelectedPlaylistsForAdd(new Set());
+                              }}
+                              className="text-gray-400 hover:text-purple-400 transition-colors"
+                            >
+                              <Plus className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <div className="flex-shrink-0 text-gray-400 text-sm w-12 text-right">
+                            {song.duration}
+                          </div>
+                        </motion.div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div>
                   {/* Sub-tabs */}
                   <div className="flex gap-2 mb-6 bg-white/5 p-1 rounded-xl w-fit">
-                    {(['list', 'add', 'requests'] as const).map(tab => (
+                    {(['list', 'add', 'requests', 'vibe'] as const).map(tab => (
                       <button
                         key={tab}
-                        onClick={() => setFriendsTab(tab)}
+                        onClick={() => {
+                          if (tab === 'vibe') {
+                            if (vibeSession) return; // Already in session
+                            setShowVibeCreate(true);
+                          } else {
+                            setFriendsTab(tab);
+                          }
+                        }}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-all relative ${
-                          friendsTab === tab
+                          tab === 'vibe'
+                            ? 'bg-orange-500/30 text-orange-300 hover:bg-orange-500/40'
+                            : friendsTab === tab
                             ? 'bg-purple-500/40 text-white'
                             : 'text-gray-400 hover:text-white'
                         }`}
@@ -1684,6 +1935,7 @@ export default function Dashboard() {
                             )}
                           </span>
                         )}
+                        {tab === 'vibe' && '🎵 Vibe Together'}
                       </button>
                     ))}
                   </div>
@@ -2957,6 +3209,326 @@ export default function Dashboard() {
                 </button>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Vibe Together — Create Session Modal */}
+      <AnimatePresence>
+        {showVibeCreate && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
+            onClick={() => { setShowVibeCreate(false); setVibeInviteFriends(new Set()); }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-gradient-to-br from-gray-900 to-black border border-orange-500/30 rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[80vh] flex flex-col"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-white">🎵 Vibe Together</h2>
+                  <p className="text-gray-400 text-sm mt-1">Create a session and invite friends</p>
+                </div>
+                <button onClick={() => { setShowVibeCreate(false); setVibeInviteFriends(new Set()); }} className="text-gray-400 hover:text-white">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="mb-4">
+                <p className="text-white font-medium mb-2">Select friends to invite:</p>
+                <div className="max-h-48 overflow-y-auto space-y-2">
+                  {friends.length === 0 ? (
+                    <p className="text-gray-500 text-sm text-center py-4">No friends to invite</p>
+                  ) : (
+                    friends.map((friend: any) => (
+                      <label
+                        key={friend.id}
+                        className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${
+                          vibeInviteFriends.has(friend.id)
+                            ? 'bg-orange-500/20 border border-orange-500/50'
+                            : 'bg-white/5 border border-white/10 hover:bg-white/10'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={vibeInviteFriends.has(friend.id)}
+                          onChange={(e) => {
+                            const newSet = new Set(vibeInviteFriends);
+                            if (e.target.checked) newSet.add(friend.id);
+                            else newSet.delete(friend.id);
+                            setVibeInviteFriends(newSet);
+                          }}
+                          className="w-4 h-4 accent-orange-500"
+                        />
+                        <div className="flex-1">
+                          <span className="text-white font-medium">{friend.username}</span>
+                          <span className="text-gray-400 text-sm ml-2">#{friend.unique_code}</span>
+                        </div>
+                        {friend.is_online && <span className="w-2 h-2 bg-green-500 rounded-full" />}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t border-white/10">
+                <button
+                  onClick={() => { setShowVibeJoin(true); setShowVibeCreate(false); }}
+                  className="px-6 py-3 bg-white/5 text-gray-300 rounded-lg font-medium hover:bg-white/10 transition-all border border-white/10"
+                >
+                  Join Instead
+                </button>
+                <button
+                  onClick={createVibeSession}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-orange-500 to-pink-500 text-white rounded-lg font-medium hover:shadow-lg hover:shadow-orange-500/30 transition-all"
+                >
+                  Create Session
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Vibe Together — Join Session Modal */}
+      <AnimatePresence>
+        {showVibeJoin && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
+            onClick={() => { setShowVibeJoin(false); setVibeJoinCode(''); }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-gradient-to-br from-gray-900 to-black border border-orange-500/30 rounded-2xl p-8 max-w-md w-full mx-4"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-white">Join Vibe Session</h2>
+                  <p className="text-gray-400 text-sm mt-1">Enter the 4-digit session code</p>
+                </div>
+                <button onClick={() => { setShowVibeJoin(false); setVibeJoinCode(''); }} className="text-gray-400 hover:text-white">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="relative mb-6">
+                <input
+                  type="text"
+                  value={vibeJoinCode}
+                  onChange={(e) => setVibeJoinCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  placeholder="0000"
+                  maxLength={4}
+                  className="w-full px-4 py-4 bg-white/5 border border-white/10 rounded-xl text-white text-center text-3xl tracking-[1em] font-mono placeholder-gray-600 focus:outline-none focus:border-orange-500"
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => { setShowVibeCreate(true); setShowVibeJoin(false); }}
+                  className="px-6 py-3 bg-white/5 text-gray-300 rounded-lg font-medium hover:bg-white/10 transition-all border border-white/10"
+                >
+                  Create Instead
+                </button>
+                <button
+                  onClick={joinVibeSession}
+                  disabled={vibeJoinCode.length !== 4}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-orange-500 to-pink-500 text-white rounded-lg font-medium hover:shadow-lg hover:shadow-orange-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Join Session
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Vibe Together — Session Overlay (full-screen when in session) */}
+      <AnimatePresence>
+        {vibeSession && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-gradient-to-br from-gray-950 via-black to-orange-950 z-[60] flex flex-col"
+          >
+            {/* Session Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+              <div className="flex items-center gap-4">
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  🎵 Vibe Session
+                </h2>
+                <div className="flex items-center gap-2 px-3 py-1 bg-white/10 rounded-lg">
+                  <span className="text-gray-400 text-sm">Code:</span>
+                  <span className="text-orange-400 font-mono font-bold">{vibeSession?.session_code}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(vibeSession?.session_code || '');
+                      showNotification('success', 'Code copied!');
+                    }}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    <Copy className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                {/* Member avatars */}
+                <div className="flex -space-x-2">
+                  {vibeMembers.map((member: any) => (
+                    <div
+                      key={member.id}
+                      className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center text-white text-xs font-bold border-2 border-black relative"
+                      title={member.username}
+                    >
+                      {member.username?.[0]?.toUpperCase()}
+                      {member.is_host && (
+                        <span className="absolute -top-1 -right-1 w-3 h-3 bg-yellow-400 rounded-full border border-black flex items-center justify-center text-[6px]">👑</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={leaveVibeSession}
+                  className="px-4 py-2 bg-red-500/20 text-red-300 rounded-lg text-sm hover:bg-red-500/30 transition-all border border-red-500/30"
+                >
+                  Leave
+                </button>
+              </div>
+            </div>
+
+            {/* Session Content */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Left: Queue */}
+              <div className="w-96 border-r border-white/10 flex flex-col">
+                <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+                  <h3 className="text-white font-semibold">Queue ({vibeQueue.length})</h3>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                  {vibeQueue.length === 0 ? (
+                    <div className="text-center py-12">
+                      <ListMusic className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+                      <p className="text-gray-400 text-sm">No songs yet</p>
+                      <p className="text-gray-500 text-xs mt-1">Add songs from the library</p>
+                    </div>
+                  ) : (
+                    vibeQueue.map((item: any, index: number) => {
+                      const song = item.songs;
+                      const isCurrentUser = item.added_by === user?.id;
+                      return (
+                        <div
+                          key={item.id}
+                          className={`flex items-center gap-3 p-3 rounded-lg transition-all ${
+                            vibeCurrentSong?.id === song?.id
+                              ? 'bg-orange-500/20 border border-orange-500/50'
+                              : 'bg-white/5 hover:bg-white/10 border border-transparent'
+                          }`}
+                          onClick={() => {
+                            if (song) {
+                              vibeControl('next', 0, song.id);
+                              setCurrentSong(song);
+                              setIsPlaying(true);
+                            }
+                          }}
+                        >
+                          <span className="w-6 text-center text-gray-400 text-sm">{index + 1}</span>
+                          <div className="flex-1 min-w-0">
+                            <p className={`font-medium truncate ${vibeCurrentSong?.id === song?.id ? 'text-orange-300' : 'text-white'}`}>
+                              {song?.title || 'Unknown'}
+                            </p>
+                            <p className="text-gray-400 text-sm truncate">{song?.artist || 'Unknown'}</p>
+                          </div>
+                          {isCurrentUser && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeSongFromVibeQueue(item.id);
+                              }}
+                              className="text-gray-500 hover:text-red-400 transition-colors"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Right: Now Playing + Add Songs */}
+              <div className="flex-1 flex flex-col">
+                {/* Now Playing */}
+                <div className="flex-1 flex items-center justify-center p-8">
+                  <div className="text-center max-w-md">
+                    <div className="w-64 h-64 mx-auto rounded-2xl bg-gradient-to-br from-orange-500/30 to-pink-500/30 flex items-center justify-center mb-6 border border-white/10">
+                      <Music className="w-24 h-24 text-orange-400/50" />
+                    </div>
+                    {vibeCurrentSong ? (
+                      <>
+                        <h3 className="text-2xl font-bold text-white mb-2">{vibeCurrentSong.title}</h3>
+                        <p className="text-gray-400 text-lg">{vibeCurrentSong.artist}</p>
+                      </>
+                    ) : (
+                      <p className="text-gray-400 text-lg">No song playing</p>
+                    )}
+                    {/* Synced controls */}
+                    <div className="flex items-center justify-center gap-4 mt-6">
+                      <button
+                        onClick={() => vibeControl(isPlaying ? 'pause' : 'play')}
+                        className="w-14 h-14 bg-orange-500 rounded-full flex items-center justify-center hover:bg-orange-600 transition-all"
+                      >
+                        {isPlaying ? <Pause className="w-6 h-6 text-white" /> : <Play className="w-6 h-6 text-white ml-1" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Add Songs Section */}
+                <div className="border-t border-white/10 p-4">
+                  <div className="relative mb-3">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      value={vibeSearch}
+                      onChange={(e) => setVibeSearch(e.target.value)}
+                      placeholder="Search songs to add..."
+                      className="w-full pl-9 pr-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                  <div className="max-h-40 overflow-y-auto space-y-1">
+                    {songs
+                      .filter(s => vibeSearch === '' || s.title.toLowerCase().includes(vibeSearch.toLowerCase()) || s.artist.toLowerCase().includes(vibeSearch.toLowerCase()))
+                      .slice(0, 20)
+                      .map((song: Song) => (
+                        <div
+                          key={song.id}
+                          className="flex items-center justify-between p-2 rounded-lg hover:bg-white/5 transition-all cursor-pointer"
+                          onClick={() => addSongToVibeQueue(song.id)}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="text-white text-sm truncate">{song.title}</p>
+                            <p className="text-gray-500 text-xs truncate">{song.artist}</p>
+                          </div>
+                          <Plus className="w-4 h-4 text-gray-400 flex-shrink-0 ml-2" />
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
