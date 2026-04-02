@@ -32,6 +32,7 @@ import {
   X,
   Check,
   Copy,
+  UserMinus,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase, type Song } from '@/lib/supabase';
@@ -1723,17 +1724,38 @@ export default function Dashboard() {
                                   <p className="text-gray-400 text-sm">ID: #{friend.unique_code}</p>
                                 </div>
                               </div>
-                              <button
-                                onClick={async () => {
-                                  setViewingFriend(friend);
-                                  const res = await fetch(`/api/friends/${friend.id}/playlists`);
-                                  const data = await res.json();
-                                  if (data.success) setFriendPlaylists(data.playlists || []);
-                                }}
-                                className="px-4 py-2 bg-white/5 text-gray-300 text-sm rounded-lg hover:bg-white/10 hover:text-white transition-all border border-white/10 flex items-center gap-2"
-                              >
-                                <ListMusic className="w-4 h-4" /> View Playlists
-                              </button>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={async () => {
+                                    setViewingFriend(friend);
+                                    const res = await fetch(`/api/friends/${friend.id}/playlists`);
+                                    const data = await res.json();
+                                    if (data.success) setFriendPlaylists(data.playlists || []);
+                                  }}
+                                  className="px-4 py-2 bg-white/5 text-gray-300 text-sm rounded-lg hover:bg-white/10 hover:text-white transition-all border border-white/10 flex items-center gap-2"
+                                >
+                                  <ListMusic className="w-4 h-4" /> View Playlists
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    if (!confirm(`Remove ${friend.username} as a friend?`)) return;
+                                    const res = await fetch('/api/friends', {
+                                      method: 'DELETE',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ friendId: friend.id })
+                                    });
+                                    const data = await res.json();
+                                    if (data.success) {
+                                      showNotification('success', `${friend.username} removed from friends`);
+                                      fetchFriends();
+                                    }
+                                  }}
+                                  className="w-10 h-10 bg-red-500/10 text-red-400 rounded-lg flex items-center justify-center hover:bg-red-500/30 transition-all border border-red-500/30"
+                                  title="Remove friend"
+                                >
+                                  <UserMinus className="w-4 h-4" />
+                                </button>
+                              </div>
                             </div>
                           ))}
                         </div>

@@ -46,3 +46,18 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({ success: true, friends: enriched });
 }
+
+// DELETE /api/friends - remove a friend (bidirectional)
+export async function DELETE(request: NextRequest) {
+  const user = await getAuthUser(request);
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+  const { friendId } = await request.json();
+  if (!friendId) return NextResponse.json({ success: false, error: 'Friend ID required' }, { status: 400 });
+
+  // Remove both directions
+  await supabase.from('friendships').delete().eq('user_id', user.id).eq('friend_id', friendId);
+  await supabase.from('friendships').delete().eq('user_id', friendId).eq('friend_id', user.id);
+
+  return NextResponse.json({ success: true });
+}
