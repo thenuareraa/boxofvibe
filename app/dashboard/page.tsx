@@ -165,13 +165,8 @@ export default function Dashboard() {
             setCurrentSong(savedSong);
             setCurrentQueue(songsData);
             setQueueIndex(songsData.findIndex((s: Song) => s.id === savedSong.id));
-            // Seek to last position after audio loads
-            setTimeout(() => {
-              if (audioRef.current && lastPosition > 0) {
-                audioRef.current.currentTime = lastPosition;
-              }
-            }, 800);
-            addDebugLog(`Restored last song: ${savedSong.title} at ${lastPosition}s`);
+            // Start from beginning, don't restore position
+            addDebugLog(`Restored last song: ${savedSong.title}`);
           } else {
             setCurrentSong(songsData[0]);
             setCurrentQueue(songsData);
@@ -257,6 +252,15 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (user) fetchFriends();
+  }, [user, fetchFriends]);
+
+  // Real-time polling for friend requests and friends list
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(() => {
+      fetchFriends();
+    }, 5000);
+    return () => clearInterval(interval);
   }, [user, fetchFriends]);
 
   const handleLogout = async () => {
@@ -519,6 +523,15 @@ export default function Dashboard() {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [showProfileMenu]);
+
+  // Helper: convert percentage of song duration to MM:SS
+  const formatPercentToTime = (percent: number) => {
+    if (!audioRef.current || !audioRef.current.duration || !isFinite(audioRef.current.duration)) return '0:00';
+    const seconds = (percent / 100) * audioRef.current.duration;
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   // Update volume
   useEffect(() => {
@@ -2816,9 +2829,9 @@ export default function Dashboard() {
                 </div>
                 
                 <div className="flex justify-between text-xs text-gray-400 mt-2 px-1 text-center font-mono">
-                  <span className="w-16 text-left">START<br/><b className="text-white">{vibeLoopStart.toFixed(1)}%</b></span>
-                  <span className="text-orange-400 mt-2"><b>LOOPING {(vibeLoopEnd - vibeLoopStart).toFixed(1)}%</b></span>
-                  <span className="w-16 text-right">END<br/><b className="text-white">{vibeLoopEnd.toFixed(1)}%</b></span>
+                  <span className="w-16 text-left">START<br/><b className="text-white">{formatPercentToTime(vibeLoopStart)}</b></span>
+                  <span className="text-orange-400 mt-2"><b>LOOPING {formatPercentToTime(vibeLoopEnd - vibeLoopStart)}</b></span>
+                  <span className="w-16 text-right">END<br/><b className="text-white">{formatPercentToTime(vibeLoopEnd)}</b></span>
                 </div>
               </div>
 
