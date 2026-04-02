@@ -40,28 +40,50 @@ export async function GET(request: NextRequest) {
 
 // POST /api/friends/requests - send a friend request by unique_code
 export async function POST(request: NextRequest) {
+  console.log('[Friend Request] POST endpoint hit');
+  
   const user = await getAuthUser(request);
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  if (!user) {
+    console.log('[Friend Request] Unauthorized - no valid session');
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
 
-  const { unique_code } = await request.json();
-  if (!unique_code) return NextResponse.json({ success: false, error: 'unique_code required' }, { status: 400 });
-
+  const body = await request.json();
+  const { unique_code } = body;
   console.log(`[Friend Request] User ${user.username} (${user.id}) sending request to code: ${unique_code}`);
+  
+  if (!unique_code) {
+    console.log('[Friend Request] No unique_code provided');
+    return NextResponse.json({ success: false, error: 'unique_code required' }, { status: 400 });
+  }
 
   // Find target user
-  const { data: target } = await supabase
+  const { data: target, error: targetError } = await supabase
     .from('custom_users').select('id, username').eq('unique_code', unique_code).single();
+
+  if (targetError) {
+    console.log(`[Friend Request] Error finding target user: ${targetError.message}`);
+  }
 
   if (!target) {
     console.log(`[Friend Request] No user found with code: ${unique_code}`);
     return NextResponse.json({ success: false, error: 'No user found with that ID' }, { status: 404 });
   }
-  if (target.id === user.id) return NextResponse.json({ success: false, error: "You can't add yourself" }, { status: 400 });
+  
+  console.log(`[Friend Request] Found target user: ${target.username} (${target.id})`);
+  
+  if (target.id === user.id) {
+    console.log('[Friend Request] User tried to add themselves');
+    return NextResponse.json({ success: false, error: "You can't add yourself" }, { status: 400 });
+  }
 
   // Check if already friends
   const { data: existing } = await supabase
     .from('friendships').select('id').eq('user_id', user.id).eq('friend_id', target.id).single();
-  if (existing) return NextResponse.json({ success: false, error: 'Already friends' }, { status: 400 });
+  if (existing) {
+    console.log('[Friend Request] Already friends');
+    return NextResponse.json({ success: false, error: 'Already friends' }, { status: 400 });
+  }
 
   // Check if request already sent
   const { data: existingReq } = await supabase
@@ -72,17 +94,18 @@ export async function POST(request: NextRequest) {
   }
 
   // Insert request
-  const { error } = await supabase.from('friend_requests').insert([{
+  const { data: inserted, error } = await supabase.from('friend_requests').insert([{
     sender_id: user.id,
     receiver_id: target.id,
     status: 'pending'
-  }]);
+  }]).select();
 
   if (error) {
     console.error(`[Friend Request] Insert error: ${error.message}`);
+    console.error(`[Friend Request] Error details: ${JSON.stringify(error)}`);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 
-  console.log(`[Friend Request] Successfully sent request from ${user.id} to ${target.id}`);
+  console.log(`[Friend Request] Successfully created request: ${JSON.stringify(inserted)}`);
   return NextResponse.json({ success: true, message: `Friend request sent to ${target.username}` });
 }

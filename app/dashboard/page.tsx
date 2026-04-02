@@ -2033,17 +2033,21 @@ export default function Dashboard() {
                         </div>
                         <button
                           onClick={async () => {
+                            console.log('[Friend Request] Button clicked, code:', addFriendCode);
                             if (addFriendCode.length !== 4) {
                               showNotification('error', 'Enter a valid 4-digit ID');
                               return;
                             }
                             try {
+                              console.log('[Friend Request] Sending request to API with code:', addFriendCode);
                               const res = await fetch('/api/friends/requests', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ unique_code: addFriendCode })
                               });
+                              console.log('[Friend Request] Response status:', res.status);
                               const data = await res.json();
+                              console.log('[Friend Request] Response data:', data);
                               if (data.success) {
                                 showNotification('success', `Request sent to ${data.message?.split('to ')[1] || 'friend'}!`);
                                 setAddFriendCode('');
@@ -2058,6 +2062,7 @@ export default function Dashboard() {
                                 }
                               }
                             } catch (err) {
+                              console.error('[Friend Request] Network error:', err);
                               showNotification('error', 'Network error. Check connection.');
                             }
                           }}
