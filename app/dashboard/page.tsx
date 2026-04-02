@@ -319,6 +319,21 @@ export default function Dashboard() {
     }
   };
 
+  const acceptVibeInvite = async (sessionId: number) => {
+    const res = await fetch('/api/vibe/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionCode: vibeInvites.find(v => v.session_id === sessionId)?.session_code })
+    });
+    const data = await res.json();
+    if (data.success) {
+      setVibeSession(data.session);
+      setVibeInvites(prev => prev.filter(v => v.session_id !== sessionId));
+      loadVibeSession(data.session.id);
+      showNotification('success', 'Joined the vibe!');
+    }
+  };
+
   const leaveVibeSession = async () => {
     if (!vibeSession) return;
     await fetch('/api/vibe/leave', {
@@ -397,28 +412,78 @@ export default function Dashboard() {
     });
   };
 
-  // Polling for vibe session state (fast: 1.5s)
+  // Polling for vibe session state (fast: 1s)
   useEffect(() => {
     if (!vibeSession) return;
     const interval = setInterval(() => {
       loadVibeSession(vibeSession.id);
-    }, 1500);
+    }, 1000);
     return () => clearInterval(interval);
   }, [vibeSession]);
 
-  // Vibe sync: if session has a current song and is playing, sync audio
+  // Poll for vibe invites when not in a session
+  useEffect(() => {
+    if (vibeSession || !user) return;
+    const interval = setInterval(async () => {
+      // Check all active sessions for pending invites
+      const { data: allSessions } = await supabase
+        .from('vibe_sessions')
+        .select('id, session_code, host_id, status')
+        .eq('status', 'active');
+      
+      if (allSessions) {
+        for (const session of allSessions) {
+          const { data: invite } = await supabase
+            .from('vibe_invites')
+            .select('id')
+            .eq('session_id', session.id)
+            .eq('receiver_id', user.id)
+            .eq('status', 'pending')
+            .single();
+          
+          if (invite && !vibeInvites.find(v => v.session_id === session.id)) {
+            const { data: host } = await supabase
+              .from('custom_users')
+              .select('username')
+              .eq('id', session.host_id)
+              .single();
+            
+            const newInvite = { session_id: session.id, session_code: session.session_code, host_name: host?.username };
+            setVibeInvites(prev => [...prev, newInvite]);
+            showNotification('info', `${host?.username} invited you to a Vibe Session! Code: ${session.session_code}`);
+          }
+        }
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [vibeSession, user]);
+
+  // Vibe sync: host controls audio, members sync to host
   useEffect(() => {
     if (!vibeSession || !vibeCurrentSong || !audioRef.current) return;
     const audio = audioRef.current;
+    
+    // If current song changed, load it
+    if (audio.src !== vibeCurrentSong.file_url) {
+      audio.src = vibeCurrentSong.file_url;
+      audio.load();
+    }
+    
+    // Sync position
     const targetTime = vibeSession.current_position || 0;
-    // Only seek if difference is more than 2 seconds
-    if (Math.abs(audio.currentTime - targetTime) > 2) {
+    if (Math.abs(audio.currentTime - targetTime) > 1) {
       audio.currentTime = targetTime;
     }
-    if (vibeSession.is_playing !== isPlaying) {
-      setIsPlaying(vibeSession.is_playing);
+    
+    // Sync play/pause
+    if (vibeSession.is_playing && !isPlaying) {
+      audio.play().catch(() => {});
+      setIsPlaying(true);
+    } else if (!vibeSession.is_playing && isPlaying) {
+      audio.pause();
+      setIsPlaying(false);
     }
-  }, [vibeSession?.current_position, vibeSession?.is_playing, vibeCurrentSong?.id]);
+  }, [vibeSession?.current_position, vibeSession?.is_playing, vibeCurrentSong?.id, vibeCurrentSong?.file_url]);
 
   const handleLogout = async () => {
     await fetch('/api/custom-auth/logout', { method: 'POST' });
@@ -3391,13 +3456,13 @@ export default function Dashboard() {
             className="fixed inset-0 bg-gradient-to-br from-gray-950 via-black to-orange-950 z-[60] flex flex-col"
           >
             {/* Session Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+            <div className="flex items-center justify-between px-6 py-3 border-b border-white/10">
               <div className="flex items-center gap-4">
-                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
                   🎵 Vibe Session
                 </h2>
                 <div className="flex items-center gap-2 px-3 py-1 bg-white/10 rounded-lg">
-                  <span className="text-gray-400 text-sm">Code:</span>
+                  <span className="text-gray-400 text-xs">Code:</span>
                   <span className="text-orange-400 font-mono font-bold">{vibeSession?.session_code}</span>
                   <button
                     onClick={() => {
@@ -3411,7 +3476,6 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                {/* Member avatars */}
                 <div className="flex -space-x-2">
                   {vibeMembers.map((member: any) => (
                     <div
@@ -3428,7 +3492,7 @@ export default function Dashboard() {
                 </div>
                 <button
                   onClick={leaveVibeSession}
-                  className="px-4 py-2 bg-red-500/20 text-red-300 rounded-lg text-sm hover:bg-red-500/30 transition-all border border-red-500/30"
+                  className="px-4 py-1.5 bg-red-500/20 text-red-300 rounded-lg text-sm hover:bg-red-500/30 transition-all border border-red-500/30"
                 >
                   Leave
                 </button>
@@ -3438,16 +3502,15 @@ export default function Dashboard() {
             {/* Session Content */}
             <div className="flex-1 flex overflow-hidden">
               {/* Left: Queue */}
-              <div className="w-96 border-r border-white/10 flex flex-col">
-                <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
-                  <h3 className="text-white font-semibold">Queue ({vibeQueue.length})</h3>
+              <div className="w-80 border-r border-white/10 flex flex-col">
+                <div className="px-4 py-3 border-b border-white/10">
+                  <h3 className="text-white font-semibold text-sm">Queue ({vibeQueue.length})</h3>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
                   {vibeQueue.length === 0 ? (
                     <div className="text-center py-12">
-                      <ListMusic className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+                      <ListMusic className="w-10 h-10 text-gray-600 mx-auto mb-3" />
                       <p className="text-gray-400 text-sm">No songs yet</p>
-                      <p className="text-gray-500 text-xs mt-1">Add songs from the library</p>
                     </div>
                   ) : (
                     vibeQueue.map((item: any, index: number) => {
@@ -3466,7 +3529,7 @@ export default function Dashboard() {
                             }
                           }}
                           onDragEnd={() => setVibeDragIndex(null)}
-                          className={`flex items-center gap-3 p-3 rounded-lg transition-all cursor-pointer ${
+                          className={`flex items-center gap-2 p-2 rounded-lg transition-all cursor-pointer ${
                             vibeDragIndex === index ? 'opacity-50 scale-95' : ''
                           } ${
                             vibeCurrentSong?.id === song?.id
@@ -3477,19 +3540,18 @@ export default function Dashboard() {
                             if (song) {
                               vibeControl('next', 0, song.id);
                               setCurrentSong(song);
-                              setIsPlaying(true);
                             }
                           }}
                         >
-                          <div className="text-gray-500 cursor-grab active:cursor-grabbing" title="Drag to reorder">
-                            <GripVertical className="w-4 h-4" />
+                          <div className="text-gray-500 cursor-grab active:cursor-grabbing flex-shrink-0">
+                            <GripVertical className="w-3.5 h-3.5" />
                           </div>
-                          <span className="w-6 text-center text-gray-400 text-sm">{index + 1}</span>
+                          <span className="w-5 text-center text-gray-400 text-xs flex-shrink-0">{index + 1}</span>
                           <div className="flex-1 min-w-0">
-                            <p className={`font-medium truncate ${vibeCurrentSong?.id === song?.id ? 'text-orange-300' : 'text-white'}`}>
+                            <p className={`font-medium text-sm truncate ${vibeCurrentSong?.id === song?.id ? 'text-orange-300' : 'text-white'}`}>
                               {song?.title || 'Unknown'}
                             </p>
-                            <p className="text-gray-400 text-sm truncate">{song?.artist || 'Unknown'}</p>
+                            <p className="text-gray-500 text-xs truncate">{song?.artist || 'Unknown'}</p>
                           </div>
                           {isCurrentUser && (
                             <button
@@ -3497,9 +3559,9 @@ export default function Dashboard() {
                                 e.stopPropagation();
                                 removeSongFromVibeQueue(item.id);
                               }}
-                              className="text-gray-500 hover:text-red-400 transition-colors"
+                              className="text-gray-500 hover:text-red-400 transition-colors flex-shrink-0"
                             >
-                              <X className="w-4 h-4" />
+                              <X className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>
@@ -3512,28 +3574,86 @@ export default function Dashboard() {
               {/* Right: Now Playing + Add Songs */}
               <div className="flex-1 flex flex-col">
                 {/* Now Playing */}
-                <div className="flex-1 flex items-center justify-center p-8">
-                  <div className="text-center max-w-md">
-                    <div className="w-64 h-64 mx-auto rounded-2xl bg-gradient-to-br from-orange-500/30 to-pink-500/30 flex items-center justify-center mb-6 border border-white/10">
-                      <Music className="w-24 h-24 text-orange-400/50" />
+                <div className="flex-1 flex flex-col items-center justify-center px-8">
+                  <div className="w-48 h-48 rounded-2xl bg-gradient-to-br from-orange-500/30 to-pink-500/30 flex items-center justify-center mb-4 border border-white/10">
+                    <Music className="w-16 h-16 text-orange-400/50" />
+                  </div>
+                  {vibeCurrentSong ? (
+                    <>
+                      <h3 className="text-xl font-bold text-white mb-1 truncate max-w-md text-center">{vibeCurrentSong.title}</h3>
+                      <p className="text-gray-400 text-sm mb-4">{vibeCurrentSong.artist}</p>
+                    </>
+                  ) : (
+                    <p className="text-gray-400 text-sm mb-4">No song playing</p>
+                  )}
+                  
+                  {/* Progress bar */}
+                  <div className="w-full max-w-md mb-4">
+                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                      <span>{formatTime(audioRef.current?.currentTime || 0)}</span>
+                      <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-orange-500 rounded-full transition-all duration-1000"
+                          style={{ width: vibeCurrentSong ? `${((audioRef.current?.currentTime || 0) / (parseFloat(vibeCurrentSong.duration) || 1)) * 100}%` : '0%' }}
+                        />
+                      </div>
+                      <span>{vibeCurrentSong?.duration || '0:00'}</span>
                     </div>
-                    {vibeCurrentSong ? (
-                      <>
-                        <h3 className="text-2xl font-bold text-white mb-2">{vibeCurrentSong.title}</h3>
-                        <p className="text-gray-400 text-lg">{vibeCurrentSong.artist}</p>
-                      </>
-                    ) : (
-                      <p className="text-gray-400 text-lg">No song playing</p>
-                    )}
-                    {/* Synced controls */}
-                    <div className="flex items-center justify-center gap-4 mt-6">
-                      <button
-                        onClick={() => vibeControl(isPlaying ? 'pause' : 'play')}
-                        className="w-14 h-14 bg-orange-500 rounded-full flex items-center justify-center hover:bg-orange-600 transition-all"
-                      >
-                        {isPlaying ? <Pause className="w-6 h-6 text-white" /> : <Play className="w-6 h-6 text-white ml-1" />}
-                      </button>
-                    </div>
+                  </div>
+
+                  {/* Synced controls */}
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={() => {
+                        vibeControl('prev');
+                        if (vibeQueue.length > 0) {
+                          const idx = vibeQueue.findIndex(q => q.songs?.id === vibeCurrentSong?.id);
+                          const prevIdx = idx > 0 ? idx - 1 : vibeQueue.length - 1;
+                          const prevSong = vibeQueue[prevIdx]?.songs;
+                          if (prevSong) {
+                            vibeControl('next', 0, prevSong.id);
+                            setCurrentSong(prevSong);
+                          }
+                        }
+                      }}
+                      className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center hover:bg-white/20 transition-all"
+                    >
+                      <SkipBack className="w-5 h-5 text-white" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        const newPlaying = !isPlaying;
+                        vibeControl(newPlaying ? 'play' : 'pause');
+                        if (audioRef.current) {
+                          if (newPlaying) {
+                            audioRef.current.play().catch(() => {});
+                          } else {
+                            audioRef.current.pause();
+                          }
+                          setIsPlaying(newPlaying);
+                        }
+                      }}
+                      className="w-14 h-14 bg-orange-500 rounded-full flex items-center justify-center hover:bg-orange-600 transition-all shadow-lg shadow-orange-500/30"
+                    >
+                      {isPlaying ? <Pause className="w-6 h-6 text-white" /> : <Play className="w-6 h-6 text-white ml-1" />}
+                    </button>
+                    <button
+                      onClick={() => {
+                        vibeControl('next');
+                        if (vibeQueue.length > 0) {
+                          const idx = vibeQueue.findIndex(q => q.songs?.id === vibeCurrentSong?.id);
+                          const nextIdx = idx < vibeQueue.length - 1 ? idx + 1 : 0;
+                          const nextSong = vibeQueue[nextIdx]?.songs;
+                          if (nextSong) {
+                            vibeControl('next', 0, nextSong.id);
+                            setCurrentSong(nextSong);
+                          }
+                        }
+                      }}
+                      className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center hover:bg-white/20 transition-all"
+                    >
+                      <SkipForward className="w-5 h-5 text-white" />
+                    </button>
                   </div>
                 </div>
 
@@ -3549,10 +3669,10 @@ export default function Dashboard() {
                       className="w-full pl-9 pr-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-orange-500"
                     />
                   </div>
-                  <div className="max-h-40 overflow-y-auto space-y-1">
+                  <div className="max-h-32 overflow-y-auto space-y-1">
                     {songs
                       .filter(s => vibeSearch === '' || s.title.toLowerCase().includes(vibeSearch.toLowerCase()) || s.artist.toLowerCase().includes(vibeSearch.toLowerCase()))
-                      .slice(0, 20)
+                      .slice(0, 15)
                       .map((song: Song) => (
                         <div
                           key={song.id}
@@ -3569,6 +3689,42 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Vibe Invite Notification */}
+      <AnimatePresence>
+        {vibeInvites.length > 0 && !vibeSession && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-24 right-6 z-50"
+          >
+            <div className="bg-gradient-to-br from-gray-900 to-black border border-orange-500/30 rounded-xl p-4 shadow-lg shadow-orange-500/10">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-lg">🎵</span>
+                <span className="text-white font-semibold text-sm">Vibe Invite</span>
+              </div>
+              {vibeInvites.map((invite: any) => (
+                <div key={invite.session_id} className="flex items-center gap-2 mb-2">
+                  <span className="text-gray-300 text-sm">{invite.host_name} invited you!</span>
+                  <button
+                    onClick={() => acceptVibeInvite(invite.session_id)}
+                    className="px-3 py-1 bg-orange-500 text-white text-xs rounded-lg hover:bg-orange-600 transition-all"
+                  >
+                    Join
+                  </button>
+                  <button
+                    onClick={() => setVibeInvites(prev => prev.filter(v => v.session_id !== invite.session_id))}
+                    className="px-3 py-1 bg-white/10 text-gray-300 text-xs rounded-lg hover:bg-white/20 transition-all"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              ))}
             </div>
           </motion.div>
         )}
