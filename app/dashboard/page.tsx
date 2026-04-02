@@ -99,6 +99,7 @@ export default function Dashboard() {
   const [copyPlaylistName, setCopyPlaylistName] = useState('');
   const [friendPlaylistsCache, setFriendPlaylistsCache] = useState<Record<number, any[]>>({});
   const [friendPlaylistSongsCache, setFriendPlaylistSongsCache] = useState<Record<number, Song[]>>({});
+  const [removeFriendConfirm, setRemoveFriendConfirm] = useState<any | null>(null);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -1888,19 +1889,7 @@ export default function Dashboard() {
                                   <ListMusic className="w-4 h-4" /> View Playlists
                                 </button>
                                 <button
-                                  onClick={async () => {
-                                    if (!confirm(`Remove ${friend.username} as a friend?`)) return;
-                                    const res = await fetch('/api/friends', {
-                                      method: 'DELETE',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ friendId: friend.id })
-                                    });
-                                    const data = await res.json();
-                                    if (data.success) {
-                                      showNotification('success', `${friend.username} removed from friends`);
-                                      fetchFriends();
-                                    }
-                                  }}
+                                  onClick={() => setRemoveFriendConfirm(friend)}
                                   className="w-10 h-10 bg-red-500/10 text-red-400 rounded-lg flex items-center justify-center hover:bg-red-500/30 transition-all border border-red-500/30"
                                   title="Remove friend"
                                 >
@@ -3114,6 +3103,62 @@ export default function Dashboard() {
                   className="flex-1 px-4 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg font-medium"
                 >
                   Add to My Library
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Remove Friend Confirmation */}
+      <AnimatePresence>
+        {removeFriendConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[60]"
+            onClick={() => setRemoveFriendConfirm(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-gradient-to-br from-gray-900 to-black border border-red-500/30 rounded-2xl p-6 max-w-sm w-full mx-4"
+            >
+              <div className="text-center mb-6">
+                <div className="w-14 h-14 rounded-full bg-red-500/20 flex items-center justify-center mx-auto mb-4">
+                  <UserMinus className="w-7 h-7 text-red-400" />
+                </div>
+                <h3 className="text-xl font-bold text-white mb-2">Remove Friend</h3>
+                <p className="text-gray-400 text-sm">Are you sure you want to remove <span className="text-white font-semibold">{removeFriendConfirm.username}</span> from your friends?</p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setRemoveFriendConfirm(null)}
+                  className="flex-1 px-4 py-3 bg-white/5 text-gray-300 rounded-lg font-medium hover:bg-white/10 transition-all border border-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    const res = await fetch('/api/friends', {
+                      method: 'DELETE',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ friendId: removeFriendConfirm.id })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                      showNotification('success', `${removeFriendConfirm.username} removed from friends`);
+                      setFriendPlaylistsCache(prev => { const n = { ...prev }; delete n[removeFriendConfirm.id]; return n; });
+                      fetchFriends();
+                    }
+                    setRemoveFriendConfirm(null);
+                  }}
+                  className="flex-1 px-4 py-3 bg-red-500 text-white rounded-lg font-medium hover:bg-red-600 transition-all"
+                >
+                  Remove
                 </button>
               </div>
             </motion.div>
