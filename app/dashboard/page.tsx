@@ -274,7 +274,7 @@ export default function Dashboard() {
     if (!user) return;
     const interval = setInterval(() => {
       fetchFriends();
-    }, 5000);
+    }, 3000);
     return () => clearInterval(interval);
   }, [user, fetchFriends]);
 
@@ -1917,7 +1917,7 @@ export default function Dashboard() {
                         }}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-all relative ${
                           tab === 'vibe'
-                            ? 'bg-orange-500/30 text-orange-300 hover:bg-orange-500/40'
+                            ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-lg shadow-violet-500/25 hover:shadow-violet-500/40'
                             : friendsTab === tab
                             ? 'bg-purple-500/40 text-white'
                             : 'text-gray-400 hover:text-white'
@@ -2037,24 +2037,28 @@ export default function Dashboard() {
                               showNotification('error', 'Enter a valid 4-digit ID');
                               return;
                             }
-                            const res = await fetch('/api/friends/requests', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ unique_code: addFriendCode })
-                            });
-                            const data = await res.json();
-                            if (data.success) {
-                              showNotification('success', 'Friend request sent!');
-                              setAddFriendCode('');
-                              fetchFriends();
-                            } else {
-                              const isAlready = data.error?.includes('already') || data.error?.includes('Already');
-                              if (isAlready) {
-                                showNotification('info', data.error);
+                            try {
+                              const res = await fetch('/api/friends/requests', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ unique_code: addFriendCode })
+                              });
+                              const data = await res.json();
+                              if (data.success) {
+                                showNotification('success', `Request sent to ${data.message?.split('to ')[1] || 'friend'}!`);
                                 setAddFriendCode('');
+                                fetchFriends();
                               } else {
-                                showNotification('error', data.error || 'Failed to send request');
+                                const isAlready = data.error?.includes('already') || data.error?.includes('Already');
+                                if (isAlready) {
+                                  showNotification('info', data.error);
+                                  setAddFriendCode('');
+                                } else {
+                                  showNotification('error', data.error || 'Failed to send request');
+                                }
                               }
+                            } catch (err) {
+                              showNotification('error', 'Network error. Check connection.');
                             }
                           }}
                           className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-medium hover:shadow-lg hover:shadow-purple-500/30 transition-all"

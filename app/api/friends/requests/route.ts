@@ -46,11 +46,16 @@ export async function POST(request: NextRequest) {
   const { unique_code } = await request.json();
   if (!unique_code) return NextResponse.json({ success: false, error: 'unique_code required' }, { status: 400 });
 
+  console.log(`[Friend Request] User ${user.username} (${user.id}) sending request to code: ${unique_code}`);
+
   // Find target user
   const { data: target } = await supabase
     .from('custom_users').select('id, username').eq('unique_code', unique_code).single();
 
-  if (!target) return NextResponse.json({ success: false, error: 'No user found with that ID' }, { status: 404 });
+  if (!target) {
+    console.log(`[Friend Request] No user found with code: ${unique_code}`);
+    return NextResponse.json({ success: false, error: 'No user found with that ID' }, { status: 404 });
+  }
   if (target.id === user.id) return NextResponse.json({ success: false, error: "You can't add yourself" }, { status: 400 });
 
   // Check if already friends
@@ -61,7 +66,10 @@ export async function POST(request: NextRequest) {
   // Check if request already sent
   const { data: existingReq } = await supabase
     .from('friend_requests').select('id, status').eq('sender_id', user.id).eq('receiver_id', target.id).single();
-  if (existingReq) return NextResponse.json({ success: false, error: 'Request already sent' }, { status: 400 });
+  if (existingReq) {
+    console.log(`[Friend Request] Request already exists with status: ${existingReq.status}`);
+    return NextResponse.json({ success: false, error: 'Request already sent' }, { status: 400 });
+  }
 
   // Insert request
   const { error } = await supabase.from('friend_requests').insert([{
@@ -70,7 +78,11 @@ export async function POST(request: NextRequest) {
     status: 'pending'
   }]);
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  if (error) {
+    console.error(`[Friend Request] Insert error: ${error.message}`);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
 
+  console.log(`[Friend Request] Successfully sent request from ${user.id} to ${target.id}`);
   return NextResponse.json({ success: true, message: `Friend request sent to ${target.username}` });
 }
