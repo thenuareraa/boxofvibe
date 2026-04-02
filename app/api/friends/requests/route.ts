@@ -85,12 +85,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'Already friends' }, { status: 400 });
   }
 
-  // Check if request already sent
+  // Check if a PENDING request already exists (skip accepted/rejected ones)
   const { data: existingReq } = await supabase
-    .from('friend_requests').select('id, status').eq('sender_id', user.id).eq('receiver_id', target.id).single();
+    .from('friend_requests').select('id, status').eq('sender_id', user.id).eq('receiver_id', target.id).eq('status', 'pending').single();
   if (existingReq) {
-    console.log(`[Friend Request] Request already exists with status: ${existingReq.status}`);
+    console.log(`[Friend Request] Pending request already exists`);
     return NextResponse.json({ success: false, error: 'Request already sent' }, { status: 400 });
+  }
+
+  // Check if target already sent us a pending request - accept it instead
+  const { data: reverseReq } = await supabase
+    .from('friend_requests').select('id').eq('sender_id', target.id).eq('receiver_id', user.id).eq('status', 'pending').single();
+  if (reverseReq) {
+    console.log('[Friend Request] Target already sent a request, accepting it');
+    await supabase.from('friend_requests').update({ status: 'accepted' }).eq('id', reverseReq.id);
+    await supabase.from('friendships').insert([
+      { user_id: user.id, friend_id: target.id },
+      { user_id: target.id, friend_id: user.id },
+    ]);
+    return NextResponse.json({ success: true, message: `Friend request accepted from ${target.username}` });
   }
 
   // Insert request
