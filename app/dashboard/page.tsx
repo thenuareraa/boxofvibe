@@ -3082,10 +3082,27 @@ export default function Dashboard() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
-            className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50"
+            className="fixed bottom-28 right-6 z-50"
           >
-            <div className={`px-6 py-3 rounded-lg backdrop-blur-xl border shadow-lg ${notification.type === 'success' ? 'bg-green-500/20 border-green-500/50 text-green-200' : notification.type === 'error' ? 'bg-red-500/20 border-red-500/50 text-red-200' : 'bg-blue-500/20 border-blue-500/50 text-blue-200'}`}>
-              <p className="font-medium">{notification.message}</p>
+            <div className={`bg-gradient-to-br from-gray-900 to-black border rounded-xl p-4 shadow-lg max-w-sm ${
+              notification.type === 'success'
+                ? 'border-green-500/50 shadow-green-500/10'
+                : notification.type === 'error'
+                ? 'border-red-500/50 shadow-red-500/10'
+                : 'border-blue-500/50 shadow-blue-500/10'
+            }`}>
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">
+                  {notification.type === 'success' ? '✅' : notification.type === 'error' ? '❌' : 'ℹ️'}
+                </span>
+                <p className={`font-medium text-sm ${
+                  notification.type === 'success'
+                    ? 'text-green-200'
+                    : notification.type === 'error'
+                    ? 'text-red-200'
+                    : 'text-blue-200'
+                }`}>{notification.message}</p>
+              </div>
             </div>
           </motion.div>
         )}
