@@ -33,18 +33,18 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ success: false, error: 'Not friends with this user' }, { status: 403 });
   }
 
-  // Get friend's playlists with song count
+  // Get friend's playlists with song count in a single query
   const { data: playlists } = await supabase
     .from('playlists')
-    .select('id, name, created_at')
+    .select('id, name, created_at, playlist_songs(count)')
     .eq('custom_user_id', friendId)
     .order('created_at', { ascending: false });
 
-  // Count songs per playlist
-  const enriched = await Promise.all((playlists || []).map(async (pl) => {
-    const { count } = await supabase
-      .from('playlist_songs').select('id', { count: 'exact', head: true }).eq('playlist_id', pl.id);
-    return { ...pl, song_count: count || 0 };
+  const enriched = (playlists || []).map((pl: any) => ({
+    id: pl.id,
+    name: pl.name,
+    created_at: pl.created_at,
+    song_count: pl.playlist_songs?.[0]?.count || 0,
   }));
 
   return NextResponse.json({ success: true, playlists: enriched });

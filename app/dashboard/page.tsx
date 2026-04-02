@@ -33,6 +33,7 @@ import {
   Check,
   Copy,
   UserMinus,
+  GripVertical,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase, type Song } from '@/lib/supabase';
@@ -109,6 +110,7 @@ export default function Dashboard() {
   const [vibeInvites, setVibeInvites] = useState<any[]>([]);
   const [vibeSearch, setVibeSearch] = useState('');
   const [vibeSongToAdd, setVibeSongToAdd] = useState<Song | null>(null);
+  const [vibeDragIndex, setVibeDragIndex] = useState<number | null>(null);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -371,6 +373,21 @@ export default function Dashboard() {
     }
   };
 
+  const reorderVibeQueue = async (dragIndex: number, dropIndex: number) => {
+    if (!vibeSession || dragIndex === dropIndex) return;
+    const newQueue = [...vibeQueue];
+    const [removed] = newQueue.splice(dragIndex, 1);
+    newQueue.splice(dropIndex, 0, removed);
+    // Update positions
+    const updates = newQueue.map((item, idx) => ({ id: item.id, position: idx }));
+    await fetch(`/api/vibe/${vibeSession.id}/reorder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queueItems: updates })
+    });
+    loadVibeSession(vibeSession.id);
+  };
+
   const vibeControl = async (action: string, position?: number, songId?: number) => {
     if (!vibeSession) return;
     await fetch(`/api/vibe/${vibeSession.id}/control`, {
@@ -380,12 +397,12 @@ export default function Dashboard() {
     });
   };
 
-  // Polling for vibe session state
+  // Polling for vibe session state (fast: 1.5s)
   useEffect(() => {
     if (!vibeSession) return;
     const interval = setInterval(() => {
       loadVibeSession(vibeSession.id);
-    }, 3000);
+    }, 1500);
     return () => clearInterval(interval);
   }, [vibeSession]);
 
@@ -3439,7 +3456,19 @@ export default function Dashboard() {
                       return (
                         <div
                           key={item.id}
-                          className={`flex items-center gap-3 p-3 rounded-lg transition-all ${
+                          draggable
+                          onDragStart={() => setVibeDragIndex(index)}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            if (vibeDragIndex !== null && vibeDragIndex !== index) {
+                              reorderVibeQueue(vibeDragIndex, index);
+                              setVibeDragIndex(null);
+                            }
+                          }}
+                          onDragEnd={() => setVibeDragIndex(null)}
+                          className={`flex items-center gap-3 p-3 rounded-lg transition-all cursor-pointer ${
+                            vibeDragIndex === index ? 'opacity-50 scale-95' : ''
+                          } ${
                             vibeCurrentSong?.id === song?.id
                               ? 'bg-orange-500/20 border border-orange-500/50'
                               : 'bg-white/5 hover:bg-white/10 border border-transparent'
@@ -3452,6 +3481,9 @@ export default function Dashboard() {
                             }
                           }}
                         >
+                          <div className="text-gray-500 cursor-grab active:cursor-grabbing" title="Drag to reorder">
+                            <GripVertical className="w-4 h-4" />
+                          </div>
                           <span className="w-6 text-center text-gray-400 text-sm">{index + 1}</span>
                           <div className="flex-1 min-w-0">
                             <p className={`font-medium truncate ${vibeCurrentSong?.id === song?.id ? 'text-orange-300' : 'text-white'}`}>
