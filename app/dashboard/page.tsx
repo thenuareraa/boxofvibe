@@ -388,8 +388,8 @@ export default function Dashboard() {
     };
 
     const handleTimeUpdate = () => {
-      // VIBE LOOP: check segment boundaries
-      if (isVibeLoopActive && audio.duration) {
+      // VIBE LOOP: check segment boundaries (active OR preview while modal open)
+      if ((isVibeLoopActive || showVibeLoop) && audio.duration) {
         const endTime = (vibeLoopEnd / 100) * audio.duration;
         const startTime = (vibeLoopStart / 100) * audio.duration;
         if (audio.currentTime >= endTime) {
@@ -508,7 +508,7 @@ export default function Dashboard() {
       audio.removeEventListener('progress', handleProgress);
       audio.removeEventListener('error', handleError);
     };
-  }, [isRepeat, volume, isDraggingProgress, isShuffle, shuffleQueue, currentSong, currentQueue, queueIndex, isPlaying, isVibeLoopActive, vibeLoopStart, vibeLoopEnd]);
+  }, [isRepeat, volume, isDraggingProgress, isShuffle, shuffleQueue, currentSong, currentQueue, queueIndex, isPlaying, isVibeLoopActive, vibeLoopStart, vibeLoopEnd, showVibeLoop]);
 
   // Click outside profile to close
   useEffect(() => {
@@ -1794,8 +1794,15 @@ export default function Dashboard() {
                             if (data.success) {
                               showNotification('success', 'Friend request sent!');
                               setAddFriendCode('');
+                              fetchFriends();
                             } else {
-                              showNotification('error', data.error || 'Failed to send request');
+                              const isAlready = data.error?.includes('already') || data.error?.includes('Already');
+                              if (isAlready) {
+                                showNotification('info', data.error);
+                                setAddFriendCode('');
+                              } else {
+                                showNotification('error', data.error || 'Failed to send request');
+                              }
                             }
                           }}
                           className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-medium hover:shadow-lg hover:shadow-purple-500/30 transition-all"
@@ -2785,7 +2792,6 @@ export default function Dashboard() {
                     if (!vibeTrackRef.current) return;
                     const rect = vibeTrackRef.current.getBoundingClientRect();
                     const percent = ((e.clientX - rect.left) / rect.width) * 100;
-                    // Determine which handle is closer
                     const distStart = Math.abs(percent - vibeLoopStart);
                     const distEnd = Math.abs(percent - vibeLoopEnd);
                     setVibeDraggingHandle(distStart < distEnd ? 'start' : 'end');
@@ -2802,27 +2808,25 @@ export default function Dashboard() {
                       setVibeLoopEnd(Math.max(percent, vibeLoopStart + 1));
                     }
                     
+                    // Jump to START of loop region and play
                     if (audioRef.current && audioRef.current.duration) {
-                      const val = vibeDraggingHandle === 'start' ? Math.min(percent, vibeLoopEnd - 1) : Math.max(percent, vibeLoopStart + 1);
-                      audioRef.current.currentTime = (val / 100) * audioRef.current.duration;
+                      const startTime = Math.min(vibeLoopStart, vibeLoopEnd - 1);
+                      const startSeconds = (startTime / 100) * audioRef.current.duration;
+                      audioRef.current.currentTime = startSeconds;
+                      if (!isPlaying) {
+                        audioRef.current.play().catch(console.error);
+                        setIsPlaying(true);
+                      }
                     }
                   }}
                   onPointerUp={() => {
                     if (vibeDraggingHandle) {
                       setVibeDraggingHandle(null);
-                      if (audioRef.current && !isPlaying) {
-                         audioRef.current.play().catch(console.error);
-                         setIsPlaying(true);
-                      }
                     }
                   }}
                   onPointerLeave={() => {
                     if (vibeDraggingHandle) {
                       setVibeDraggingHandle(null);
-                      if (audioRef.current && !isPlaying) {
-                         audioRef.current.play().catch(console.error);
-                         setIsPlaying(true);
-                      }
                     }
                   }}
                 >
