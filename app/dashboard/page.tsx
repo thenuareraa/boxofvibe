@@ -97,6 +97,8 @@ export default function Dashboard() {
   const [friendPlaylistSongs, setFriendPlaylistSongs] = useState<Song[]>([]);
   const [showCopyPlaylistModal, setShowCopyPlaylistModal] = useState<any | null>(null);
   const [copyPlaylistName, setCopyPlaylistName] = useState('');
+  const [friendPlaylistsCache, setFriendPlaylistsCache] = useState<Record<number, any[]>>({});
+  const [friendPlaylistSongsCache, setFriendPlaylistSongsCache] = useState<Record<number, Song[]>>({});
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -252,6 +254,30 @@ export default function Dashboard() {
       console.error('Error fetching friends:', e);
     }
   }, [user]);
+
+  // Prefetch friend's playlists and songs in background
+  const prefetchFriendData = async (friendId: number) => {
+    if (friendPlaylistsCache[friendId]) return; // Already cached
+    try {
+      const res = await fetch(`/api/friends/${friendId}/playlists`);
+      const data = await res.json();
+      if (data.success) {
+        setFriendPlaylistsCache(prev => ({ ...prev, [friendId]: data.playlists || [] }));
+        // Also prefetch songs for each playlist
+        for (const pl of (data.playlists || [])) {
+          if (!friendPlaylistSongsCache[pl.id]) {
+            const songsRes = await fetch(`/api/friends/${friendId}/playlists/${pl.id}/songs`);
+            const songsData = await songsRes.json();
+            if (songsData.success) {
+              setFriendPlaylistSongsCache(prev => ({ ...prev, [pl.id]: songsData.songs || [] }));
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error prefetching friend data:', e);
+    }
+  };
 
   useEffect(() => {
     if (user) fetchFriends();
@@ -870,10 +896,16 @@ export default function Dashboard() {
   };
 
   const loadFriendPlaylistSongs = async (friendId: number, playlistId: number) => {
+    // Use cached data if available
+    if (friendPlaylistSongsCache[playlistId]) {
+      setFriendPlaylistSongs(friendPlaylistSongsCache[playlistId]);
+      return;
+    }
     const res = await fetch(`/api/friends/${friendId}/playlists/${playlistId}/songs`);
     const data = await res.json();
     if (data.success) {
       setFriendPlaylistSongs(data.songs || []);
+      setFriendPlaylistSongsCache(prev => ({ ...prev, [playlistId]: data.songs || [] }));
     }
   };
 
@@ -1651,6 +1683,11 @@ export default function Dashboard() {
                               setViewingFriendPlaylist(playlist);
                               await loadFriendPlaylistSongs(viewingFriend.id, playlist.id);
                             }}
+                            onMouseEnter={() => {
+                              if (viewingFriend && !friendPlaylistSongsCache[playlist.id]) {
+                                prefetchFriendData(viewingFriend.id);
+                              }
+                            }}
                           >
                             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-teal-500 flex items-center justify-center">
                               <ListMusic className="w-5 h-5 text-white" />
@@ -1833,10 +1870,19 @@ export default function Dashboard() {
                                 <button
                                   onClick={async () => {
                                     setViewingFriend(friend);
-                                    const res = await fetch(`/api/friends/${friend.id}/playlists`);
-                                    const data = await res.json();
-                                    if (data.success) setFriendPlaylists(data.playlists || []);
+                                    // Use cached data if available, otherwise fetch
+                                    if (friendPlaylistsCache[friend.id]) {
+                                      setFriendPlaylists(friendPlaylistsCache[friend.id]);
+                                    } else {
+                                      const res = await fetch(`/api/friends/${friend.id}/playlists`);
+                                      const data = await res.json();
+                                      if (data.success) {
+                                        setFriendPlaylists(data.playlists || []);
+                                        setFriendPlaylistsCache(prev => ({ ...prev, [friend.id]: data.playlists || [] }));
+                                      }
+                                    }
                                   }}
+                                  onMouseEnter={() => prefetchFriendData(friend.id)}
                                   className="px-4 py-2 bg-white/5 text-gray-300 text-sm rounded-lg hover:bg-white/10 hover:text-white transition-all border border-white/10 flex items-center gap-2"
                                 >
                                   <ListMusic className="w-4 h-4" /> View Playlists
