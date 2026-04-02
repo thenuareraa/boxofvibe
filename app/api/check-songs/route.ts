@@ -22,7 +22,6 @@ export async function GET() {
     urlTypes: songs?.map(s => ({
       title: s.title,
       isR2: s.file_url.includes('r2.dev'),
-      isDrive: s.file_url.includes('drive.google.com') || s.file_url.includes('googleusercontent.com'),
       url: s.file_url
     }))
   });

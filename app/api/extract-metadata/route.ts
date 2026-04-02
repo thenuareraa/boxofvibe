@@ -12,20 +12,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Convert Google Drive URL to direct download link
-    let downloadUrl = fileUrl;
-    if (fileUrl.includes('drive.google.com')) {
-      const fileIdMatch = fileUrl.match(/\/d\/([^\/]+)/);
-      if (fileIdMatch) {
-        const fileId = fileIdMatch[1];
-        downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-      }
-    }
-
     // Fetch the MP3 file
-    const response = await fetch(downloadUrl);
+    const response = await fetch(fileUrl);
     if (!response.ok) {
-      throw new Error('Failed to fetch file from Google Drive');
+      throw new Error('Failed to fetch file');
     }
 
     const arrayBuffer = await response.arrayBuffer();

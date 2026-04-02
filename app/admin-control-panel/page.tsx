@@ -125,43 +125,9 @@ export default function AdminPanel() {
       setUploadProgress({ current: i + 1, total: mp3Files.length });
 
       try {
-        // Upload to Google Drive and extract metadata
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const response = await fetch('/api/upload-to-drive', {
-          method: 'POST',
-          body: formData,
-        });
-
-        const result = await response.json();
-
-        if (!response.ok) {
-          throw new Error(result.error || 'Failed to upload file');
-        }
-
-        // Auto-create database entry with default cover
-        const { error } = await supabase
-          .from('songs')
-          .insert([
-            {
-              title: result.metadata.title,
-              artist: result.metadata.artist,
-              album: result.metadata.album,
-              duration: result.metadata.duration,
-              cover_url: 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=2400&q=95&auto=format&fit=crop',
-              file_url: result.fileUrl,
-              file_size: result.metadata.fileSize,
-              bitrate: '320 kbps',
-              format: 'MP3',
-              play_count: 0,
-              uploaded_by: 'Admin',
-            },
-          ]);
-
-        if (error) throw error;
-        successCount++;
-
+        // TODO: Implement R2 upload
+        failCount++;
+        console.error(`Upload not implemented for ${file.name}`);
       } catch (error: any) {
         console.error(`Failed to upload ${file.name}:`, error);
         failCount++;
@@ -295,7 +261,7 @@ export default function AdminPanel() {
     }
   };
 
-  const handleSyncFromDrive = async () => {
+  const handleSyncFromR2 = async () => {
     setSyncing(true);
     try {
       const response = await fetch('/api/sync-from-r2', {
@@ -440,7 +406,7 @@ export default function AdminPanel() {
             </div>
 
             <button
-              onClick={handleSyncFromDrive}
+              onClick={handleSyncFromR2}
               disabled={syncing}
               className="flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-purple-500 via-pink-500 to-rose-500 text-white rounded-xl font-bold text-lg hover:shadow-2xl hover:shadow-purple-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105"
             >
@@ -795,7 +761,7 @@ export default function AdminPanel() {
                     <p className="text-white">{new Date(selectedSong.created_at).toLocaleDateString()}</p>
                   </div>
                   <div>
-                    <p className="text-gray-400 text-sm">Google Drive Link</p>
+                    <p className="text-gray-400 text-sm">File URL</p>
                     <p className="text-blue-400 text-xs truncate">{selectedSong.file_url}</p>
                   </div>
                 </div>
