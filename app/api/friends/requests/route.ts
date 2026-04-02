@@ -106,7 +106,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, message: `Friend request accepted from ${target.username}` });
   }
 
-  // Insert request
+  // Delete any old requests between these users (accepted/rejected) to avoid unique constraint violation
+  await supabase.from('friend_requests').delete().eq('sender_id', user.id).eq('receiver_id', target.id);
+  await supabase.from('friend_requests').delete().eq('sender_id', target.id).eq('receiver_id', user.id);
+
+  // Insert new request
   const { data: inserted, error } = await supabase.from('friend_requests').insert([{
     sender_id: user.id,
     receiver_id: target.id,
