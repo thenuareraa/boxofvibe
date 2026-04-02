@@ -118,7 +118,17 @@ Check that `.next` folder exists and has content:
 C:\Users\thenu\Desktop\music\boxofvibe\.next\
 ```
 
-### Step 3: Deploy to Production
+### Step 3: Commit and Push to GitHub (ALWAYS DO THIS FIRST)
+
+```bash
+git add -A
+git commit -m "description of changes"
+git push origin main
+```
+
+**IMPORTANT: Always push to GitHub BEFORE deploying.** This keeps the remote repo in sync and provides a fallback.
+
+### Step 4: Deploy to Production
 
 ```bash
 netlify deploy --prod --no-build --dir .next
@@ -202,36 +212,14 @@ Note: GitHub push may trigger Netlify's remote build too, but that's slower. CLI
 # Full deploy sequence (from scratch)
 cd C:\Users\thenu\Desktop\music\boxofvibe
 npm run build
+git add -A
+git commit -m "description of changes"
+git push origin main
 netlify deploy --prod --no-build --dir .next
 ```
 
 ---
 
-## Troubleshooting
-
-### Build fails with parsing error
-- Check the file and line mentioned in the error
-- Look for missing `}`, `)`, or unclosed tags
-- Common after editing files — make sure try/catch blocks are properly closed
-
-### Deploy says "no changes"
-- This is fine if you just rebuilt. The `.next` folder is always treated as new content.
-
-### Env vars not taking effect
-- Env vars require a redeploy to take effect
-- Check with `netlify env:list`
-- Make sure you're setting them in the correct context (use `all` context)
-
-### Netlify CLI not found
-- Install globally: `npm install -g netlify-cli`
-- Verify: `netlify status`
-
-### "Current project" shows wrong site
-- Run `netlify link` and select `boxofvibe-music`
-- Or use `--site e36fd884-a6a5-4067-bb03-301aa96526f8` flag
-
----
-
 ## Summary (One-Liner)
 
-**Build locally with `npm run build`, then deploy with `netlify deploy --prod --no-build --dir .next`. Never use `--build` flag on Windows.**
+**Build → commit → push to GitHub → deploy with `netlify deploy --prod --no-build --dir .next`. Always push to GitHub before deploying. Never use `--build` flag on Windows.**
