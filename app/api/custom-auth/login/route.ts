@@ -86,7 +86,9 @@ export async function POST(request: NextRequest) {
         id: user.id,
         email: user.email,
         username: user.username,
+        unique_code: user.unique_code,
       },
+      sessionToken: sessionToken,
     });
 
     // Set session cookie
