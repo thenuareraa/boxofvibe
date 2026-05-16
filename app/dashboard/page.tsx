@@ -58,7 +58,57 @@ export default function Dashboard() {
   const [vibeLoopEnd, setVibeLoopEnd] = useState(0);
   const [showVibeLoop, setShowVibeLoop] = useState(false);
 
+  // User & auth
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+
+  // Queue & playback
+  const [currentQueue, setCurrentQueue] = useState<Song[]>([]);
+  const [queueIndex, setQueueIndex] = useState(0);
+  const [shuffleQueue, setShuffleQueue] = useState<Song[]>([]);
+  const [isDraggingProgress, setIsDraggingProgress] = useState(false);
+  const [isDraggingVolume, setIsDraggingVolume] = useState(false);
+
+  // Liked songs & playlists
+  const [likedSongs, setLikedSongs] = useState<Set<number>>(new Set());
+  const [playlists, setPlaylists] = useState<any[]>([]);
+  const [playlistSongs, setPlaylistSongs] = useState<Song[]>([]);
+  const [selectedPlaylist, setSelectedPlaylist] = useState<any>(null);
+  const [showCreatePlaylist, setShowCreatePlaylist] = useState(false);
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const [songForPlaylistAdd, setSongForPlaylistAdd] = useState<Song | null>(null);
+  const [selectedPlaylistsForAdd, setSelectedPlaylistsForAdd] = useState<Set<number>>(new Set());
+  const [showPlayerAddToPlaylist, setShowPlayerAddToPlaylist] = useState(false);
+
+  // Friends
+  const [friends, setFriends] = useState<any[]>([]);
+  const [friendRequests, setFriendRequests] = useState<any[]>([]);
+  const [friendRequestCount, setFriendRequestCount] = useState(0);
+  const [friendsTab, setFriendsTab] = useState<'list' | 'add' | 'requests'>('list');
+  const [addFriendCode, setAddFriendCode] = useState('');
+  const [viewingFriend, setViewingFriend] = useState<any>(null);
+  const [friendPlaylists, setFriendPlaylists] = useState<any[]>([]);
+  const [viewingFriendPlaylist, setViewingFriendPlaylist] = useState<any>(null);
+  const [friendPlaylistSongs, setFriendPlaylistSongs] = useState<Song[]>([]);
+  const [friendPlaylistsCache, setFriendPlaylistsCache] = useState<Record<number, any[]>>({});
+  const [friendPlaylistSongsCache, setFriendPlaylistSongsCache] = useState<Record<number, Song[]>>({});
+  const [removeFriendConfirm, setRemoveFriendConfirm] = useState<any>(null);
+  const [showCopyPlaylistModal, setShowCopyPlaylistModal] = useState<any>(null);
+  const [copyPlaylistName, setCopyPlaylistName] = useState('');
+
+  // UI state
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showMobileFullPlayer, setShowMobileFullPlayer] = useState(false);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [showCustomLoop, setShowCustomLoop] = useState(false);
+  const [customLoopSearch, setCustomLoopSearch] = useState('');
+  const [customLoopSource, setCustomLoopSource] = useState<Song[]>([]);
+  const [vibeDraggingHandle, setVibeDraggingHandle] = useState<string | null>(null);
+  const [notification, setNotification] = useState<{show: boolean; type: 'success'|'error'|'info'; message: string}>({show: false, type: 'success', message: ''});
+
   const audioRef = useRef<HTMLAudioElement>(null);
+  const preloadRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const progressTrackRef = useRef<HTMLDivElement>(null);
   const timeCurrentRef = useRef<HTMLSpanElement>(null);
@@ -80,8 +130,13 @@ export default function Dashboard() {
   const addDebugLog = (message: string) => {
     const timestamp = new Date().toLocaleTimeString();
     const log = `[${timestamp}] ${message}`;
-    setDebugLogs(prev => [log, ...prev].slice(0, 50)); // Keep last 50 logs
+    setDebugLogs(prev => [log, ...prev].slice(0, 50));
     console.log(log);
+  };
+
+  const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
+    setNotification({ show: true, type, message });
+    setTimeout(() => setNotification({ show: false, type: 'success', message: '' }), 3000);
   };
 
   // Check authentication and fetch user
