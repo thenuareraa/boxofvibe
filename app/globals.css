@@ -32,9 +32,21 @@ body {
   scroll-behavior: smooth;
 }
 
-/* ─── GPU-accelerated interactive elements ───────────── */
-button, a, [role="button"] {
+/* ─── Kill tap delay on interactive elements ─────────── */
+button, a, [role="button"], input[type="range"], label {
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ─── Reduce (not kill) transitions on touch devices ─── */
+@media (hover: none) and (pointer: coarse) {
+  *, *::before, *::after {
+    transition-duration: 0.1s !important;
+    transition-delay: 0s !important;
+  }
 }
 
 /* ─── CSS Equalizer bars (replaces Framer Motion ones) ── */
@@ -61,6 +73,20 @@ button, a, [role="button"] {
 .eq-bar-paused {
   animation-play-state: paused;
   transform: scaleY(0.35);
+}
+
+/* ─── Android safe area (navigation bar) ────────────── */
+html, body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent content hiding behind Android nav bar */
+body {
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-top: env(safe-area-inset-top);
 }
 
 /* ─── Progress / volume bar dragging performance ─────── */

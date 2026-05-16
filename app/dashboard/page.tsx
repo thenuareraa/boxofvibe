@@ -47,59 +47,14 @@ export default function Dashboard() {
   const [isRepeat, setIsRepeat] = useState(false);
   const [isShuffle, setIsShuffle] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState('home');
-  const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
-  const [isDraggingProgress, setIsDraggingProgress] = useState(false);
-  const [isDraggingVolume, setIsDraggingVolume] = useState(false);
-  const [likedSongs, setLikedSongs] = useState<Set<number>>(new Set());
-  const [shuffleQueue, setShuffleQueue] = useState<Song[]>([]);
-  const [showSongMenu, setShowSongMenu] = useState<number | null>(null);
-  const [notification, setNotification] = useState<{type: 'success' | 'error' | 'info', message: string} | null>(null);
-  const [playlists, setPlaylists] = useState<any[]>([]);
-  const [showCreatePlaylist, setShowCreatePlaylist] = useState(false);
-  const [newPlaylistName, setNewPlaylistName] = useState('');
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
-  const [showDebug, setShowDebug] = useState(false);
-  const preloadRef = useRef<HTMLAudioElement | null>(null);
-  const [selectedPlaylist, setSelectedPlaylist] = useState<any | null>(null);
-  const [playlistSongs, setPlaylistSongs] = useState<Song[]>([]);
-  const [showAddToPlaylist, setShowAddToPlaylist] = useState<number | null>(null);
-  const [showPlayerAddToPlaylist, setShowPlayerAddToPlaylist] = useState(false);
-  const [selectedPlaylistsForAdd, setSelectedPlaylistsForAdd] = useState<Set<number>>(new Set());
-  const [songForPlaylistAdd, setSongForPlaylistAdd] = useState<Song | null>(null);
-  const [currentQueue, setCurrentQueue] = useState<Song[]>([]);
-  const [queueIndex, setQueueIndex] = useState(0);
-  const [showCustomLoop, setShowCustomLoop] = useState(false);
+  const [activeTab, setActiveTab] = useState<'home' | 'liked' | 'playlists' | 'friends'>('home');
+  const [isCustomLoopActive, setIsCustomLoopActive] = useState(false);
   const [customLoopSelection, setCustomLoopSelection] = useState<Set<number>>(new Set());
   const [customLoopQueue, setCustomLoopQueue] = useState<Song[]>([]);
-  const [isCustomLoopActive, setIsCustomLoopActive] = useState(false);
-  const [customLoopSearch, setCustomLoopSearch] = useState('');
-  const [customLoopSource, setCustomLoopSource] = useState<Song[]>([]);
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  // Vibe Loop state
-  const [showVibeLoop, setShowVibeLoop] = useState(false);
-  const [vibeLoopStart, setVibeLoopStart] = useState(0);
-  const [vibeLoopEnd, setVibeLoopEnd] = useState(100);
-  const vibeTrackRef = useRef<HTMLDivElement>(null);
-  const [vibeDraggingHandle, setVibeDraggingHandle] = useState<'start' | 'end' | null>(null);
   const [isVibeLoopActive, setIsVibeLoopActive] = useState(false);
-  // Friends state
-  const [friendsTab, setFriendsTab] = useState<'list'|'add'|'requests'>('list');
-  const [friends, setFriends] = useState<any[]>([]);
-  const [friendRequests, setFriendRequests] = useState<any[]>([]);
-  const [addFriendCode, setAddFriendCode] = useState('');
-  const [friendRequestCount, setFriendRequestCount] = useState(0);
-  const [viewingFriend, setViewingFriend] = useState<any | null>(null);
-  const [friendPlaylists, setFriendPlaylists] = useState<any[]>([]);
-  const [viewingFriendPlaylist, setViewingFriendPlaylist] = useState<any | null>(null);
-  const [friendPlaylistSongs, setFriendPlaylistSongs] = useState<Song[]>([]);
-  const [showCopyPlaylistModal, setShowCopyPlaylistModal] = useState<any | null>(null);
-  const [copyPlaylistName, setCopyPlaylistName] = useState('');
-  const [friendPlaylistsCache, setFriendPlaylistsCache] = useState<Record<number, any[]>>({});
-  const [friendPlaylistSongsCache, setFriendPlaylistSongsCache] = useState<Record<number, Song[]>>({});
-  const [removeFriendConfirm, setRemoveFriendConfirm] = useState<any | null>(null);
+  const [vibeLoopStart, setVibeLoopStart] = useState(0);
+  const [vibeLoopEnd, setVibeLoopEnd] = useState(0);
+  const [showVibeLoop, setShowVibeLoop] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -554,6 +509,26 @@ export default function Dashboard() {
     };
   }, [showProfileMenu]);
 
+  // KILL 300ms tap delay — use pointerdown instead of click on mobile
+  useEffect(() => {
+    const isTouchDevice = 'ontouchstart' in window;
+    if (!isTouchDevice) return;
+
+    const handleTouchClick = (e: Event) => {
+      const target = e.target as HTMLElement;
+      const btn = target.closest('button, [role="button"]');
+      if (btn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const syntheticEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
+        btn.dispatchEvent(syntheticEvent);
+      }
+    };
+
+    document.addEventListener('touchend', handleTouchClick, true);
+    return () => document.removeEventListener('touchend', handleTouchClick, true);
+  }, []);
+
   // Helper: convert percentage of song duration to MM:SS
   const formatPercentToTime = (percent: number) => {
     if (!audioRef.current || !audioRef.current.duration || !isFinite(audioRef.current.duration)) return '0:00';
@@ -616,420 +591,8 @@ export default function Dashboard() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const handleSongClick = (song: Song) => {
-    // If custom loop is active and clicked song is NOT in the loop, disable custom loop
-    if (isCustomLoopActive && customLoopQueue.length > 0) {
-      const isInLoop = customLoopQueue.some(s => s.id === song.id);
-      if (!isInLoop) {
-        setIsCustomLoopActive(false);
-        setCustomLoopQueue([]);
-        setCustomLoopSelection(new Set());
-        addDebugLog('Custom loop disabled - playing song outside loop');
-        showNotification('info', 'Custom loop cleared');
-      }
-    }
-
-    // Determine the queue based on current context
-    let queue: Song[] = [];
-
-    if (selectedPlaylist) {
-      // Playing from a specific playlist
-      queue = playlistSongs;
-      addDebugLog(`Playing from playlist: ${selectedPlaylist.name} (${queue.length} songs)`);
-    } else if (activeTab === 'liked') {
-      // Playing from liked songs
-      queue = songs.filter(s => likedSongs.has(s.id));
-      addDebugLog(`Playing from liked songs (${queue.length} songs)`);
-    } else {
-      // Playing from all songs (Home tab)
-      queue = songs;
-      addDebugLog(`Playing from all songs (${queue.length} songs)`);
-    }
-
-    setCurrentQueue(queue);
-    const index = queue.findIndex(s => s.id === song.id);
-    setQueueIndex(index >= 0 ? index : 0);
-
-    // INSTANT PLAYBACK: Use preloaded audio if available
-    if (preloadRef.current && preloadRef.current.src === song.file_url && preloadRef.current.readyState >= 2) {
-      if (audioRef.current) {
-        // Swap the preloaded audio to main player
-        const tempSrc = audioRef.current.src;
-        audioRef.current.src = preloadRef.current.src;
-        audioRef.current.currentTime = 0;
-        preloadRef.current.src = tempSrc; // Old song becomes preload buffer
-        addDebugLog('Using preloaded audio for instant click play!');
-      }
-    }
-
-    setCurrentSong(song);
-    setIsPlaying(true);
-    if (progressTrackRef.current) progressTrackRef.current.style.width = '0%';
-    if (timeCurrentRef.current) timeCurrentRef.current.innerText = '0:00';
-
-    // Track play start
-    trackPlay(song.id, false, 0);
-  };
-
-  const skipNext = () => {
-    if (!currentSong) return;
-
-    // Track partial play of current song
-    if (audioRef.current) {
-      trackPlay(currentSong.id, false, audioRef.current.currentTime);
-    }
-
-    // Use custom loop queue if active
-    const activeQueue = customLoopActiveRef.current && customLoopQueueRef.current.length > 0 ? customLoopQueueRef.current :
-                       isShuffle && shuffleQueue.length > 0 ? shuffleQueue : currentQueue;
-
-    if (activeQueue.length === 0) return;
-
-    const currentIndex = activeQueue.findIndex((s) => s.id === currentSong.id);
-    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % activeQueue.length : 0;
-    const nextSong = activeQueue[nextIndex];
-
-    // INSTANT PLAYBACK: Use preloaded audio if available
-    if (preloadRef.current && preloadRef.current.src === nextSong.file_url && preloadRef.current.readyState >= 2) {
-      if (audioRef.current) {
-        // Swap the preloaded audio to main player
-        const tempSrc = audioRef.current.src;
-        audioRef.current.src = preloadRef.current.src;
-        audioRef.current.currentTime = 0;
-        preloadRef.current.src = tempSrc; // Old song becomes preload buffer
-        addDebugLog('Using preloaded audio for instant skip!');
-      }
-    }
-
-    setCurrentSong(nextSong);
-    if (!customLoopActiveRef.current && !isShuffle) {
-      setQueueIndex(nextIndex);
-    }
-    // Track play start for next song
-    trackPlay(nextSong.id, false, 0);
-    setIsPlaying(true);
-  };
-
-  const skipPrevious = () => {
-    if (!currentSong) return;
-
-    // Track partial play of current song
-    if (audioRef.current) {
-      trackPlay(currentSong.id, false, audioRef.current.currentTime);
-    }
-
-    // Use custom loop queue if active
-    const activeQueue = customLoopActiveRef.current && customLoopQueueRef.current.length > 0 ? customLoopQueueRef.current :
-                       isShuffle && shuffleQueue.length > 0 ? shuffleQueue : currentQueue;
-
-    if (activeQueue.length === 0) return;
-
-    const currentIndex = activeQueue.findIndex((s) => s.id === currentSong.id);
-    const prevIndex = (currentIndex - 1 + activeQueue.length) % activeQueue.length;
-    const prevSong = activeQueue[prevIndex];
-
-    setCurrentSong(prevSong);
-    if (!customLoopActiveRef.current && !isShuffle) {
-      setQueueIndex(prevIndex);
-    }
-    // Track play start for previous song
-    trackPlay(prevSong.id, false, 0);
-    setIsPlaying(true);
-  };
-
-  const toggleLike = async (songId: number) => {
-    // Only logged in users can like songs
-    const isLiked = likedSongs.has(songId);
-
-    // OPTIMISTIC UPDATE: Update UI immediately for instant feedback
-    setLikedSongs(prev => {
-      const newLiked = new Set(prev);
-      if (isLiked) newLiked.delete(songId);
-      else newLiked.add(songId);
-      return newLiked;
-    });
-
-    // Then sync with database in background via custom API
-    try {
-      if (isLiked) {
-        showNotification('info', 'Removed from favorites');
-        const res = await fetch('/api/custom-auth/liked-songs', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ song_id: songId })
-        });
-        const data = await res.json();
-        
-        if (!data.success) throw new Error(data.error);
-      } else {
-        showNotification('success', 'Added to favorites');
-        const res = await fetch('/api/custom-auth/liked-songs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ song_id: songId })
-        });
-        const data = await res.json();
-        
-        if (!data.success) throw new Error(data.error);
-      }
-    } catch (error) {
-      console.error('Error toggling like:', error);
-      // Revert optimistic update on error
-      setLikedSongs(prev => {
-        const newLiked = new Set(prev);
-        if (isLiked) newLiked.add(songId);
-        else newLiked.delete(songId);
-        return newLiked;
-      });
-      showNotification('error', 'Failed to update favorites');
-    }
-  };
-
-  const toggleShuffle = () => {
-    if (!isShuffle) {
-      // Create shuffle queue from current queue
-      const queueToShuffle = currentQueue.length > 0 ? currentQueue : songs;
-      const shuffled = [...queueToShuffle].sort(() => Math.random() - 0.5);
-      setShuffleQueue(shuffled);
-      showNotification('success', 'Shuffle enabled');
-    } else {
-      setShuffleQueue([]);
-      showNotification('info', 'Shuffle disabled');
-    }
-    setIsShuffle(!isShuffle);
-  };
-
-  const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
-    setNotification({ type, message });
-    setTimeout(() => setNotification(null), 3000);
-  };
-
-  const fetchPlaylists = async () => {
-    if (!user) return;
-
-    const { data, error } = await supabase
-      .from('playlists')
-      .select('*')
-      .eq('custom_user_id', user.id)
-      .order('created_at', { ascending: false });
-
-    if (!error && data) {
-      setPlaylists(data);
-    }
-  };
-
-  const createPlaylist = async () => {
-    if (!newPlaylistName.trim()) {
-      showNotification('error', 'Please enter a playlist name');
-      return;
-    }
-
-    if (!user) {
-      addDebugLog('ERROR: User not authenticated');
-      showNotification('error', 'Not authenticated');
-      return;
-    }
-
-    addDebugLog(`Creating playlist: "${newPlaylistName}" for user: ${user.id}`);
-
-    const { data, error } = await supabase
-      .from('playlists')
-      .insert([
-        {
-          name: newPlaylistName,
-          custom_user_id: user.id
-        }
-      ])
-      .select();
-
-    if (error) {
-      const errorDetails = JSON.stringify(error, null, 2);
-      addDebugLog(`ERROR creating playlist: ${errorDetails}`);
-      showNotification('error', error.message || error.details || 'Failed to create playlist');
-    } else if (data) {
-      addDebugLog(`SUCCESS: Playlist created - ${JSON.stringify(data)}`);
-      showNotification('success', 'Playlist created!');
-      setNewPlaylistName('');
-      setShowCreatePlaylist(false);
-      fetchPlaylists();
-    } else {
-      addDebugLog('ERROR: No data and no error returned');
-      showNotification('error', 'Unknown error occurred');
-    }
-  };
-
-  const deletePlaylist = async (playlistId: number) => {
-    const { error } = await supabase
-      .from('playlists')
-      .delete()
-      .eq('id', playlistId);
-
-    if (error) {
-      showNotification('error', 'Failed to delete playlist');
-    } else {
-      showNotification('success', 'Playlist deleted');
-      fetchPlaylists();
-      if (selectedPlaylist?.id === playlistId) {
-        setSelectedPlaylist(null);
-      }
-    }
-  };
-
-  const fetchPlaylistSongs = async (playlistId: number) => {
-    addDebugLog(`Fetching songs for playlist ${playlistId}`);
-
-    const { data, error } = await supabase
-      .from('playlist_songs')
-      .select(`
-        song_id,
-        songs (*)
-      `)
-      .eq('playlist_id', playlistId);
-
-    if (error) {
-      addDebugLog(`ERROR fetching playlist songs: ${JSON.stringify(error)}`);
-      showNotification('error', 'Failed to load playlist songs');
-    } else {
-      const songs = data?.map((ps: any) => ps.songs).filter(Boolean) || [];
-      setPlaylistSongs(songs);
-      addDebugLog(`SUCCESS: Loaded ${songs.length} songs`);
-    }
-  };
-
-  const loadFriendPlaylistSongs = async (friendId: number, playlistId: number) => {
-    // Use cached data if available
-    if (friendPlaylistSongsCache[playlistId]) {
-      setFriendPlaylistSongs(friendPlaylistSongsCache[playlistId]);
-      return;
-    }
-    const res = await fetch(`/api/friends/${friendId}/playlists/${playlistId}/songs`);
-    const data = await res.json();
-    if (data.success) {
-      setFriendPlaylistSongs(data.songs || []);
-      setFriendPlaylistSongsCache(prev => ({ ...prev, [playlistId]: data.songs || [] }));
-    }
-  };
-
-  const addSongToPlaylist = async (playlistId: number, songId: number) => {
-    addDebugLog(`Adding song ${songId} to playlist ${playlistId}`);
-
-    const { error } = await supabase
-      .from('playlist_songs')
-      .insert([
-        {
-          playlist_id: playlistId,
-          song_id: songId
-        }
-      ]);
-
-    if (error) {
-      addDebugLog(`ERROR adding song to playlist: ${JSON.stringify(error)}`);
-      if (error.code === '23505') {
-        showNotification('info', 'Song already in playlist');
-      } else {
-        showNotification('error', 'Failed to add song');
-      }
-    } else {
-      addDebugLog('SUCCESS: Song added to playlist');
-      showNotification('success', 'Added to playlist!');
-      if (selectedPlaylist?.id === playlistId) {
-        fetchPlaylistSongs(playlistId);
-      }
-    }
-    setShowAddToPlaylist(null);
-  };
-
-  const addSongToMultiplePlaylists = async (playlistIds: number[], songId: number) => {
-    if (playlistIds.length === 0) {
-      showNotification('info', 'Please select at least one playlist');
-      return;
-    }
-
-    addDebugLog(`Adding song ${songId} to ${playlistIds.length} playlists`);
-
-    let successCount = 0;
-    let alreadyExistsCount = 0;
-    let errorCount = 0;
-
-    for (const playlistId of playlistIds) {
-      const { error } = await supabase
-        .from('playlist_songs')
-        .insert([
-          {
-            playlist_id: playlistId,
-            song_id: songId
-          }
-        ]);
-
-      if (error) {
-        if (error.code === '23505') {
-          alreadyExistsCount++;
-          addDebugLog(`Song already in playlist ${playlistId}`);
-        } else {
-          errorCount++;
-          addDebugLog(`ERROR adding to playlist ${playlistId}: ${JSON.stringify(error)}`);
-        }
-      } else {
-        successCount++;
-        addDebugLog(`SUCCESS: Added to playlist ${playlistId}`);
-      }
-    }
-
-    // Show summary notification
-    if (successCount > 0) {
-      showNotification('success', `Added to ${successCount} playlist${successCount > 1 ? 's' : ''}!`);
-    }
-    if (alreadyExistsCount > 0) {
-      showNotification('info', `Song already in ${alreadyExistsCount} playlist${alreadyExistsCount > 1 ? 's' : ''}`);
-    }
-    if (errorCount > 0) {
-      showNotification('error', `Failed to add to ${errorCount} playlist${errorCount > 1 ? 's' : ''}`);
-    }
-
-    setShowPlayerAddToPlaylist(false);
-    setSelectedPlaylistsForAdd(new Set());
-  };
-
-  const removeSongFromPlaylist = async (playlistId: number, songId: number) => {
-    const { error } = await supabase
-      .from('playlist_songs')
-      .delete()
-      .eq('playlist_id', playlistId)
-      .eq('song_id', songId);
-
-    if (error) {
-      showNotification('error', 'Failed to remove song');
-    } else {
-      showNotification('success', 'Removed from playlist');
-      fetchPlaylistSongs(playlistId);
-    }
-  };
-
-  // Fetch playlists on mount
-  useEffect(() => {
-    if (user) {
-      fetchPlaylists();
-    }
-  }, [user]);
-
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = Number(e.target.value);
-    setVolume(val);
-    setIsMuted(false);
-  };
-
-  const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!audioRef.current || !audioRef.current.duration) return;
-    const percent = Number(e.target.value) / 100;
-    const newTime = audioRef.current.duration * percent;
-    audioRef.current.currentTime = newTime;
-    
-    // Optimistic UI update during native drag
-    if (progressTrackRef.current) progressTrackRef.current.style.width = `${percent * 100}%`;
-    if (timeCurrentRef.current) timeCurrentRef.current.innerText = formatTime(newTime);
-  };
-
-  const searchLower = debouncedSearch.trim().toLowerCase();
+  // Search directly without debounce
+  const searchLower = searchQuery.trim().toLowerCase();
   const filteredSongs = searchLower === '' ? songs : songs.filter(
     (song) =>
       song.title.toLowerCase().includes(searchLower) ||
@@ -1047,11 +610,11 @@ export default function Dashboard() {
         autoPlay={false}
       />
       <audio ref={preloadRef} preload="none" crossOrigin="anonymous" style={{ display: 'none' }} />
-      {/* Sidebar */}
+      {/* Desktop Sidebar */}
       <motion.div
         initial={{ x: -300 }}
         animate={{ x: 0 }}
-        className="w-64 bg-black/40 backdrop-blur-xl border-r border-white/10 p-6 pb-40 flex flex-col overflow-y-auto"
+        className="hidden md:flex w-64 bg-black/40 backdrop-blur-xl border-r border-white/10 p-6 pb-40 flex-col overflow-y-auto"
       >
         {/* Logo */}
         <div className="flex items-center gap-4 mb-8">
@@ -1224,9 +787,10 @@ export default function Dashboard() {
         <motion.div
           initial={{ y: -100 }}
           animate={{ y: 0 }}
-          className="bg-[#050505] border-b border-white/10 p-6 z-40"
+          transition={{ duration: 0.2 }}
+          className="bg-[#050505] border-b border-white/10 p-4 md:p-6 z-40"
         >
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <div className="flex-1 relative">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
               <input
@@ -1234,10 +798,10 @@ export default function Dashboard() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search for songs, artists..."
-                className="w-full bg-white/10 border border-white/20 rounded-full pl-12 pr-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all"
+                className="w-full bg-white/10 border border-white/20 rounded-full pl-12 pr-4 py-2.5 md:py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm md:text-base"
               />
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 md:gap-3 flex-shrink-0">
               {/* Hidden Admin Button */}
               <button
                 onClick={handleAdminAccess}
@@ -1247,10 +811,10 @@ export default function Dashboard() {
                 <Settings className="w-4 h-4 text-white/50" />
               </button>
               <div className="relative" ref={profileRef}>
-                <button 
-                  onClick={() => setShowProfileMenu(!showProfileMenu)}
-                  className="w-10 h-10 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center hover:shadow-lg hover:shadow-purple-500/50 transition-all"
-                >
+            <button 
+              onClick={() => setShowProfileMenu(!showProfileMenu)}
+              className="w-10 h-10 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center hover:shadow-lg hover:shadow-purple-500/50 transition-all active:scale-95 touch-manipulation"
+            >
                   <User className="w-5 h-5 text-white" />
                 </button>
                 
@@ -1261,7 +825,7 @@ export default function Dashboard() {
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 10, scale: 0.95 }}
                       transition={{ duration: 0.15 }}
-                      className="absolute right-0 mt-3 w-64 bg-[#0a0a0a] border border-white/20 rounded-xl shadow-[0_0_60px_rgba(0,0,0,1)] py-2 z-50 overflow-hidden"
+                      className="absolute right-0 mt-3 w-64 md:w-64 bg-[#0a0a0a] border border-white/20 rounded-xl shadow-[0_0_60px_rgba(0,0,0,1)] py-2 z-50 overflow-hidden"
                     >
                       <div className="px-4 py-4 border-b border-white/10 bg-[#1a1a1a]">
                         <p className="text-xs text-gray-400 font-medium uppercase tracking-wider mb-1">Signed in as</p>
@@ -1300,7 +864,7 @@ export default function Dashboard() {
                             setShowProfileMenu(false);
                             setActiveTab('home');
                           }}
-                          className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-2"
+                          className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-2 active:bg-white/10 touch-manipulation"
                         >
                           <Home className="w-4 h-4" /> Home
                         </button>
@@ -1309,7 +873,7 @@ export default function Dashboard() {
                             setShowProfileMenu(false);
                             setActiveTab('playlists');
                           }}
-                          className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-2"
+                          className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-2 active:bg-white/10 touch-manipulation"
                         >
                           <ListMusic className="w-4 h-4" /> Playlists
                         </button>
@@ -1317,7 +881,7 @@ export default function Dashboard() {
                       <div className="border-t border-white/10 pt-2 bg-[#0a0a0a]">
                         <button
                           onClick={handleLogout}
-                          className="w-full text-left px-4 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-red-500/5 transition-colors flex items-center gap-2"
+                          className="w-full text-left px-4 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-red-500/5 transition-colors flex items-center gap-2 active:bg-red-500/10 touch-manipulation"
                         >
                           <LogOut className="w-4 h-4" /> Sign Out
                         </button>
@@ -1331,9 +895,9 @@ export default function Dashboard() {
         </motion.div>
 
         {/* Songs Library */}
-        <div className="flex-1 overflow-y-auto p-6 pb-40">
-          <div className="mb-6">
-            <h1 className="text-3xl font-bold text-white mb-2">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-40 md:pb-40">
+          <div className="mb-4 md:mb-6">
+            <h1 className="text-2xl md:text-3xl font-bold text-white mb-2">
               {activeTab === 'home' && 'Your Music Library'}
               {activeTab === 'liked' && 'Liked Songs'}
               {activeTab === 'playlists' && 'Your Playlists'}
@@ -2041,18 +1605,18 @@ export default function Dashboard() {
               className="space-y-1"
             >
                 {filteredSongs.map((song, index) => (
-                  <div
-                    key={song.id}
-                    onClick={() => handleSongClick(song)}
-                    className={`group relative rounded-lg px-4 py-3 border transition-all duration-300 ease-out cursor-pointer ${
-                      currentSong?.id === song.id
-                        ? 'border-purple-500/50 bg-white/10'
-                        : 'border-white/5 bg-white/[0.02] hover:bg-white/5 hover:border-white/10'
-                    }`}
-                  >
-                    <div className="flex items-center gap-4">
+                    <div
+                      key={song.id}
+                      onClick={() => handleSongClick(song)}
+                      className={`group relative rounded-lg px-4 py-3 border transition-all duration-300 ease-out cursor-pointer active:scale-[0.99] touch-manipulation ${
+                        currentSong?.id === song.id
+                          ? 'border-purple-500/50 bg-white/10'
+                          : 'border-white/5 bg-white/[0.02] hover:bg-white/5 hover:border-white/10'
+                      }`}
+                    >
+                    <div className="flex items-center gap-3 md:gap-4">
                       {/* Equalizer or Play Icon */}
-                      <div className="w-12 h-12 flex-shrink-0 relative">
+                      <div className="w-10 h-10 md:w-12 md:h-12 flex-shrink-0 relative">
                         {currentSong?.id === song.id ? (
                           <div className="w-full h-full flex items-center justify-center gap-0.5">
                             {[...Array(4)].map((_, i) => (
@@ -2075,34 +1639,34 @@ export default function Dashboard() {
                           </div>
                         ) : (
                           <div className="w-full h-full rounded-lg bg-white/5 flex items-center justify-center opacity-60 group-hover:opacity-100 group-hover:bg-purple-500/20 transition-all">
-                            <Play className="w-5 h-5 text-gray-400 group-hover:text-purple-400 transition-colors" />
+                            <Play className="w-4 h-4 md:w-5 md:h-5 text-gray-400 group-hover:text-purple-400 transition-colors" />
                           </div>
                         )}
                       </div>
 
                       {/* Song Info */}
                       <div className="flex-1 min-w-0">
-                        <h3 className={`font-semibold truncate transition-colors ${
+                        <h3 className={`font-semibold truncate transition-colors text-sm md:text-base ${
                           currentSong?.id === song.id ? 'text-purple-300' : 'text-white group-hover:text-purple-200'
                         }`}>
                           {song.title}
                         </h3>
-                        <p className="text-gray-400 text-sm truncate">{song.artist}</p>
+                        <p className="text-gray-400 text-xs md:text-sm truncate">{song.artist}</p>
                       </div>
 
                       {/* Duration */}
-                      <div className="text-gray-500 text-sm font-mono flex-shrink-0">
+                      <div className="hidden md:block text-gray-500 text-sm font-mono flex-shrink-0">
                         {song.duration}
                       </div>
 
                       {/* Status Dot */}
-                      <div className="flex-shrink-0">
+                      <div className="hidden md:block flex-shrink-0">
                         <div className={`w-2 h-2 rounded-full transition-all ${
                           currentSong?.id === song.id ? 'bg-green-500 animate-pulse shadow-lg shadow-green-500/50' : 'bg-gray-700'
                         }`} />
                       </div>
 
-                      {/* Action Buttons */}
+                      {/* Action Buttons - Always visible on mobile */}
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <button
                           onClick={(e) => {
@@ -2112,10 +1676,10 @@ export default function Dashboard() {
                           className={`transition-colors ${
                             likedSongs.has(song.id)
                               ? 'text-red-500 opacity-100'
-                              : 'text-gray-400 hover:text-white opacity-0 group-hover:opacity-100'
+                              : 'text-gray-400 hover:text-white opacity-100 md:opacity-0 md:group-hover:opacity-100'
                           }`}
                         >
-                          <Heart className={`w-5 h-5 ${likedSongs.has(song.id) ? 'fill-current' : ''}`} />
+                          <Heart className={`w-4 h-4 md:w-5 md:h-5 ${likedSongs.has(song.id) ? 'fill-current' : ''}`} />
                         </button>
 
                         <button
@@ -2124,9 +1688,9 @@ export default function Dashboard() {
                             setSongForPlaylistAdd(song);
                             setSelectedPlaylistsForAdd(new Set());
                           }}
-                          className="text-gray-400 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+                          className="text-gray-400 hover:text-white transition-colors opacity-100 md:opacity-0 md:group-hover:opacity-100"
                         >
-                          <Plus className="w-5 h-5" />
+                          <Plus className="w-4 h-4 md:w-5 md:h-5" />
                         </button>
                       </div>
                     </div>
@@ -2142,11 +1706,11 @@ export default function Dashboard() {
         <motion.div
           initial={{ y: 200 }}
           animate={{ y: 0 }}
-          className="absolute bottom-0 left-0 right-0 bg-gradient-to-r from-purple-900/90 via-black/90 to-pink-900/90 backdrop-blur-2xl border-t border-white/20 p-4"
+          className="fixed bottom-[50px] md:absolute md:bottom-0 left-0 right-0 bg-gradient-to-r from-purple-900/90 via-black/90 to-pink-900/90 backdrop-blur-2xl border-t border-white/20 p-3 md:p-4 z-30"
         >
           <div className="max-w-screen-2xl mx-auto">
-            {/* Progress Bar - Glowing Comet Trail */}
-            <div className="mb-4 relative h-6 flex items-center">
+            {/* Progress Bar - Desktop */}
+            <div className="hidden md:block mb-4 relative h-6 flex items-center">
               <div
                 ref={progressBarRef}
                 className="w-full h-1.5 cursor-pointer group relative bg-white/10 rounded-full"
@@ -2163,7 +1727,7 @@ export default function Dashboard() {
                   {/* Base gradient */}
                   <div className="absolute inset-0 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full pointer-events-none" />
 
-                  {/* Clean playhead dot - Centered perfectly */}
+                  {/* Clean playhead dot */}
                   <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-x-1/2 pointer-events-none z-10">
                     <div
                       className="w-3 h-3 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.5)] opacity-0 group-hover:opacity-100 transition-all duration-200 border-2 border-purple-600"
@@ -2176,7 +1740,7 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Native Range Slider - Invisible but interactive overlay */}
+                {/* Native Range Slider */}
                 <input
                   type="range"
                   min="0"
@@ -2190,19 +1754,44 @@ export default function Dashboard() {
                   onTouchEnd={() => setIsDraggingProgress(false)}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                 />
-
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-4">
+            {/* Mobile Progress Bar (compact, no hover effects) */}
+            <div className="md:hidden mb-2 relative h-3 flex items-center">
+              <div
+                ref={progressBarRef}
+                className="w-full h-1 cursor-pointer bg-white/10 rounded-full"
+              >
+                <div
+                  ref={progressTrackRef}
+                  className="h-full rounded-full bg-gradient-to-r from-purple-500 to-pink-500"
+                  style={{ width: `0%` }}
+                />
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  defaultValue="0"
+                  onChange={handleProgressChange}
+                  onMouseDown={() => setIsDraggingProgress(true)}
+                  onMouseUp={() => setIsDraggingProgress(false)}
+                  onTouchStart={() => setIsDraggingProgress(true)}
+                  onTouchEnd={() => setIsDraggingProgress(false)}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                />
+              </div>
+            </div>
+
+            {/* Desktop Player Layout */}
+            <div className="hidden md:flex items-center justify-between gap-4">
               {/* Current Song Info */}
               <div className="flex items-center gap-4 flex-1 min-w-0">
                 {currentSong ? (
                   <>
                     <div className="w-14 h-14 rounded-lg flex-shrink-0 relative bg-gradient-to-br from-purple-600 via-purple-500 to-pink-500 p-0.5">
-                      {/* Inner container */}
                       <div className="w-full h-full bg-black/90 rounded-lg relative overflow-hidden flex items-center justify-center">
-                        {/* Smooth Spinning Vinyl Record */}
                         <motion.div
                           className="w-10 h-10 rounded-full border-2 border-gray-800 flex items-center justify-center relative shadow-[inset_0_0_10px_rgba(0,0,0,1)]"
                           style={{
@@ -2211,17 +1800,12 @@ export default function Dashboard() {
                           animate={isPlaying ? { rotate: 360 } : { rotate: 0 }}
                           transition={isPlaying ? { duration: 3, repeat: Infinity, ease: "linear" } : { duration: 0.5, ease: "easeOut" }}
                         >
-                          {/* Inner Record Label */}
                           <div className="w-3 h-3 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 shadow-inner flex items-center justify-center">
                             <div className="w-1 h-1 bg-black rounded-full" />
                           </div>
-                          
-                          {/* Grooves */}
                           <div className="absolute inset-1 rounded-full border border-white/5" />
                           <div className="absolute inset-2 rounded-full border border-white/5" />
                         </motion.div>
-
-                        {/* Pulsing Border Glow */}
                         <motion.div
                           className="absolute inset-0 rounded-lg"
                           style={{
@@ -2243,8 +1827,6 @@ export default function Dashboard() {
                           }}
                         />
                       </div>
-
-                      {/* Corner Accents */}
                       <div className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-gradient-to-br from-purple-400 to-pink-400 blur-sm" />
                       <div className="absolute -bottom-1 -left-1 w-2 h-2 rounded-full bg-gradient-to-br from-pink-400 to-purple-400 blur-sm" />
                     </div>
@@ -2295,17 +1877,15 @@ export default function Dashboard() {
                   >
                     <Shuffle className="w-4 h-4" />
                   </button>
-
                   <button
                     onClick={skipPrevious}
-                    className="text-white hover:scale-110 transition-transform"
+                    className="text-white hover:scale-110 active:scale-95 transition-transform duration-150 touch-manipulation"
                   >
                     <SkipBack className="w-5 h-5" />
                   </button>
-
                   <button
                     onClick={togglePlay}
-                    className="w-12 h-12 bg-white rounded-full flex items-center justify-center hover:scale-110 transition-transform"
+                    className="w-12 h-12 bg-white rounded-full flex items-center justify-center hover:scale-110 active:scale-95 transition-transform duration-150 touch-manipulation"
                   >
                     {isPlaying ? (
                       <Pause className="w-5 h-5 text-black" />
@@ -2313,14 +1893,12 @@ export default function Dashboard() {
                       <Play className="w-5 h-5 text-black ml-1" />
                     )}
                   </button>
-
                   <button
                     onClick={skipNext}
-                    className="text-white hover:scale-110 transition-transform"
+                    className="text-white hover:scale-110 active:scale-95 transition-transform duration-150 touch-manipulation"
                   >
                     <SkipForward className="w-5 h-5" />
                   </button>
-
                   <button
                     onClick={() => setIsRepeat(!isRepeat)}
                     className={`transition-colors ${
@@ -2329,10 +1907,8 @@ export default function Dashboard() {
                   >
                     <Repeat className="w-4 h-4" />
                   </button>
-
                   <button
                     onClick={() => {
-                      // Fix: use context-aware source
                       if (activeTab === 'liked') {
                         const liked = songs.filter(s => likedSongs.has(s.id));
                         setCustomLoopSource(liked);
@@ -2351,14 +1927,12 @@ export default function Dashboard() {
                   >
                     <List className="w-4 h-4" />
                   </button>
-
-                  {/* Vibe Loop Button */}
                   <button
                     onClick={() => setShowVibeLoop(true)}
                     className={`transition-colors relative ${
                       isVibeLoopActive ? 'text-orange-400' : 'text-gray-400 hover:text-white'
                     }`}
-                    title="Vibe Loop – loop a segment"
+                    title="Vibe Loop"
                   >
                     <Scissors className="w-4 h-4" />
                     {isVibeLoopActive && (
@@ -2366,7 +1940,6 @@ export default function Dashboard() {
                     )}
                   </button>
                 </div>
-
                 <div className="flex items-center justify-center gap-2 text-sm text-gray-300 font-mono mt-1 -ml-8">
                   <span ref={timeCurrentRef} className="w-[45px] text-right">0:00</span>
                   <span className="text-gray-500">/</span>
@@ -2401,8 +1974,6 @@ export default function Dashboard() {
                       <div className="w-3 h-3 bg-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-[0_0_8px_rgba(255,255,255,0.5)] border-2 border-white" />
                     </div>
                   </motion.div>
-                  
-                  {/* Native Range Slider - Invisible but interactive overlay */}
                   <input
                     type="range"
                     min="0"
@@ -2419,8 +1990,219 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
+
+            {/* Mobile Mini Player */}
+            <div className="md:hidden">
+              {/* Song info row with like + playlist buttons on right */}
+              <div className="flex items-center gap-3 pt-1 pb-0.5" onClick={() => setShowMobileFullPlayer(true)}>
+                {currentSong ? (
+                  <>
+                    <div className="w-10 h-10 rounded-lg flex-shrink-0 bg-gradient-to-br from-purple-600 via-purple-500 to-pink-500 p-0.5">
+                      <div className="w-full h-full bg-black/90 rounded-lg flex items-center justify-center">
+                        <motion.div
+                          className="w-7 h-7 rounded-full border border-gray-700 flex items-center justify-center"
+                          style={{ background: 'conic-gradient(from 0deg, #111, #333, #111, #333, #111)' }}
+                          animate={isPlaying ? { rotate: 360 } : { rotate: 0 }}
+                          transition={isPlaying ? { duration: 3, repeat: Infinity, ease: "linear" } : {}}
+                        >
+                          <div className="w-2 h-2 rounded-full bg-gradient-to-br from-purple-500 to-pink-500" />
+                        </motion.div>
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-white font-semibold text-sm truncate">{currentSong.title}</h4>
+                      <p className="text-gray-400 text-xs truncate">{currentSong.artist}</p>
+                    </div>
+                    <button onClick={(e) => { e.stopPropagation(); toggleLike(currentSong.id); }} className={`flex-shrink-0 p-1.5 active:scale-90 touch-manipulation ${likedSongs.has(currentSong.id) ? 'text-red-500' : 'text-gray-400'}`}>
+                      <Heart className={`w-5 h-5 ${likedSongs.has(currentSong.id) ? 'fill-current' : ''}`} />
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); setShowPlayerAddToPlaylist(true); setSelectedPlaylistsForAdd(new Set()); }} className="text-gray-400 flex-shrink-0 p-1.5 active:scale-90 touch-manipulation">
+                      <Plus className="w-5 h-5" />
+                    </button>
+                  </>
+                ) : (
+                  <div className="text-gray-400 text-sm">No song selected</div>
+                )}
+              </div>
+
+              {/* Controls row: Custom Loop | Shuffle | Prev | Play | Next | Repeat | Vibe Loop */}
+              <div className="flex items-center justify-center gap-1 py-1">
+                <button onClick={(e) => { e.stopPropagation(); if (activeTab === 'liked') { setCustomLoopSource(songs.filter(s => likedSongs.has(s.id))); } else if (selectedPlaylist && playlistSongs.length > 0) { setCustomLoopSource(playlistSongs); } else { setCustomLoopSource(currentQueue.length > 0 ? currentQueue : songs); } setCustomLoopSearch(''); setShowCustomLoop(!showCustomLoop); }} className={`p-2 active:scale-90 touch-manipulation ${isCustomLoopActive ? 'text-purple-400' : 'text-gray-400'}`}>
+                  <List className="w-4 h-4" />
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); toggleShuffle(); }} className={`p-2 active:scale-90 touch-manipulation ${isShuffle ? 'text-purple-400' : 'text-gray-400'}`}>
+                  <Shuffle className="w-4 h-4" />
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); skipPrevious(); }} className="text-white p-2 active:scale-90 touch-manipulation">
+                  <SkipBack className="w-5 h-5" />
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); togglePlay(); }} className="w-10 h-10 bg-white rounded-full flex items-center justify-center active:scale-95 touch-manipulation">
+                  {isPlaying ? <Pause className="w-5 h-5 text-black" /> : <Play className="w-5 h-5 text-black ml-0.5" />}
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); skipNext(); }} className="text-white p-2 active:scale-90 touch-manipulation">
+                  <SkipForward className="w-5 h-5" />
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); setIsRepeat(!isRepeat); }} className={`p-2 active:scale-90 touch-manipulation ${isRepeat ? 'text-purple-400' : 'text-gray-400'}`}>
+                  <Repeat className="w-4 h-4" />
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); setShowVibeLoop(true); }} className={`p-2 active:scale-90 touch-manipulation relative ${isVibeLoopActive ? 'text-orange-400' : 'text-gray-400'}`}>
+                  <Scissors className="w-4 h-4" />
+                  {isVibeLoopActive && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-orange-400 rounded-full animate-pulse" />}
+                </button>
+              </div>
+
+              {/* Timer row */}
+              <div className="flex items-center justify-center gap-2 text-xs text-gray-400 font-mono pb-1">
+                <span ref={timeCurrentRef}>0:00</span>
+                <span className="text-gray-600">/</span>
+                <span>{currentSong?.duration || '0:00'}</span>
+              </div>
+            </div>
           </div>
         </motion.div>
+
+        {/* Mobile Full Player Overlay */}
+        <AnimatePresence>
+          {showMobileFullPlayer && currentSong && (
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="fixed inset-0 z-50 md:hidden bg-gradient-to-b from-gray-900 via-black to-purple-950 flex flex-col"
+            >
+              {/* Mobile Full Player Header */}
+              <div className="flex items-center justify-between p-4">
+                <button onClick={() => setShowMobileFullPlayer(false)} className="text-gray-400 hover:text-white">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                <span className="text-xs text-gray-400 uppercase tracking-wider">Now Playing</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowPlayerAddToPlaylist(true);
+                    setSelectedPlaylistsForAdd(new Set());
+                  }}
+                  className="text-gray-400 hover:text-white"
+                >
+                  <Plus className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Album Art */}
+              <div className="flex-1 flex items-center justify-center px-12">
+                <motion.div
+                  className="w-64 h-64 rounded-2xl bg-gradient-to-br from-purple-600 via-purple-500 to-pink-500 p-1"
+                  animate={isPlaying ? { scale: [1, 1.02, 1] } : {}}
+                  transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                >
+                  <div className="w-full h-full bg-black/90 rounded-2xl flex items-center justify-center">
+                    <motion.div
+                      className="w-48 h-48 rounded-full border-2 border-gray-700 flex items-center justify-center"
+                      style={{ background: 'conic-gradient(from 0deg, #111, #333, #111, #333, #111)' }}
+                      animate={isPlaying ? { rotate: 360 } : { rotate: 0 }}
+                      transition={isPlaying ? { duration: 3, repeat: Infinity, ease: "linear" } : {}}
+                    >
+                      <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 shadow-inner flex items-center justify-center">
+                        <div className="w-4 h-4 bg-black rounded-full" />
+                      </div>
+                      <div className="absolute inset-4 rounded-full border border-white/5" />
+                      <div className="absolute inset-8 rounded-full border border-white/5" />
+                      <div className="absolute inset-12 rounded-full border border-white/5" />
+                    </motion.div>
+                  </div>
+                </motion.div>
+              </div>
+
+              {/* Song Info */}
+              <div className="px-8 py-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-white text-xl font-bold truncate">{currentSong.title}</h3>
+                    <p className="text-gray-400">{currentSong.artist}</p>
+                  </div>
+                  <button
+                    onClick={() => toggleLike(currentSong.id)}
+                    className={`ml-4 ${likedSongs.has(currentSong.id) ? 'text-red-500' : 'text-gray-400'}`}
+                  >
+                    <Heart className={`w-6 h-6 ${likedSongs.has(currentSong.id) ? 'fill-current' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Progress Bar */}
+              <div className="px-8 py-2">
+                <div className="relative h-4 flex items-center">
+                  <div className="w-full h-1 bg-white/10 rounded-full">
+                    <div
+                      ref={progressTrackRef}
+                      className="h-full rounded-full bg-gradient-to-r from-purple-500 to-pink-500"
+                      style={{ width: `0%` }}
+                    />
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      defaultValue="0"
+                      onChange={handleProgressChange}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-between text-xs text-gray-400 font-mono mt-1">
+                  <span ref={timeCurrentRef}>0:00</span>
+                  <span>{currentSong?.duration || '0:00'}</span>
+                </div>
+              </div>
+
+              {/* Controls */}
+              <div className="px-8 py-4">
+                <div className="flex items-center justify-between">
+                  <button onClick={toggleShuffle} className={`p-2 ${isShuffle ? 'text-purple-400' : 'text-gray-400'}`}>
+                    <Shuffle className="w-5 h-5" />
+                  </button>
+                  <button onClick={skipPrevious} className="text-white p-2">
+                    <SkipBack className="w-7 h-7" />
+                  </button>
+                  <button onClick={togglePlay} className="w-16 h-16 bg-white rounded-full flex items-center justify-center">
+                    {isPlaying ? <Pause className="w-7 h-7 text-black" /> : <Play className="w-7 h-7 text-black ml-1" />}
+                  </button>
+                  <button onClick={skipNext} className="text-white p-2">
+                    <SkipForward className="w-7 h-7" />
+                  </button>
+                  <button onClick={() => setIsRepeat(!isRepeat)} className={`p-2 ${isRepeat ? 'text-purple-400' : 'text-gray-400'}`}>
+                    <Repeat className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Volume */}
+              <div className="px-8 py-4 flex items-center gap-3">
+                <button onClick={() => setIsMuted(!isMuted)} className="text-gray-400 flex-shrink-0">
+                  {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+                </button>
+                <div className="flex-1 bg-white/20 rounded-full h-1 relative">
+                  <motion.div
+                    className="bg-white h-full rounded-full absolute left-0 top-0"
+                    style={{ width: `${volume}%` }}
+                  />
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={volume}
+                    onChange={handleVolumeChange}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Create Playlist Modal */}
@@ -3166,6 +2948,39 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
+      {/* Mobile Bottom Tab Navigation */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-black/95 backdrop-blur-xl border-t border-white/10 safe-area-inset-bottom" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+        <div className="flex items-center justify-around py-2">
+          {[
+            { id: 'home', icon: Home, label: 'Home' },
+            { id: 'liked', icon: Heart, label: 'Liked' },
+            { id: 'playlists', icon: ListMusic, label: 'Playlists' },
+            { id: 'friends', icon: Users, label: 'Friends' },
+          ].map(item => (
+            <button
+              key={item.id}
+              onClick={() => {
+                setActiveTab(item.id as any);
+                setSelectedPlaylist(null);
+                setPlaylistSongs([]);
+              }}
+              className={`flex flex-col items-center gap-0.5 px-3 py-1.5 relative active:scale-90 touch-manipulation ${
+                activeTab === item.id ? 'text-purple-400' : 'text-gray-500'
+              }`}
+            >
+              {activeTab === item.id && (
+                <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-purple-400 rounded-full" />
+              )}
+              <item.icon className="w-5 h-5" />
+              <span className="text-[10px] font-medium">{item.label}</span>
+              {item.id === 'friends' && friendRequestCount > 0 && (
+                <span className="absolute -top-0.5 right-0 bg-pink-500 text-white text-[8px] font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center">{friendRequestCount}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Notification Toast */}
       <AnimatePresence>
         {notification && (
@@ -3173,7 +2988,7 @@ export default function Dashboard() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
-            className="fixed bottom-44 right-6 z-50"
+            className="fixed bottom-44 md:bottom-44 right-4 md:right-6 z-50"
           >
             <div className={`bg-gradient-to-br from-gray-900 to-black border rounded-xl p-4 shadow-lg max-w-sm ${
               notification.type === 'success'
