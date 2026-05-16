@@ -63,6 +63,17 @@ button, a, [role="button"] {
   transform: scaleY(0.35);
 }
 
+/* ─── Vinyl record spin (GPU-accelerated, never interrupted by React) ── */
+@keyframes vinyl-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.vinyl-spin {
+  animation: vinyl-spin 3s linear infinite;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
 /* ─── Progress / volume bar dragging performance ─────── */
 input[type=range] {
   will-change: transform;

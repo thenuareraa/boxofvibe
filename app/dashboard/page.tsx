@@ -76,6 +76,8 @@ export default function Dashboard() {
   const [isCustomLoopActive, setIsCustomLoopActive] = useState(false);
   const [customLoopSearch, setCustomLoopSearch] = useState('');
   const [customLoopSource, setCustomLoopSource] = useState<Song[]>([]);
+  const [addingToLoop, setAddingToLoop] = useState(false);
+  const [addToLoopSelection, setAddToLoopSelection] = useState<Set<number>>(new Set());
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   // Vibe Loop state
@@ -85,6 +87,15 @@ export default function Dashboard() {
   const vibeTrackRef = useRef<HTMLDivElement>(null);
   const [vibeDraggingHandle, setVibeDraggingHandle] = useState<'start' | 'end' | null>(null);
   const [isVibeLoopActive, setIsVibeLoopActive] = useState(false);
+  // Refs for direct DOM updates during vibe drag (avoids re-rendering the whole component)
+  const vibeDragStart = useRef(0);
+  const vibeDragEnd = useRef(100);
+  const vibeHighlightRef = useRef<HTMLDivElement>(null);
+  const vibeStartThumbRef = useRef<HTMLDivElement>(null);
+  const vibeEndThumbRef = useRef<HTMLDivElement>(null);
+  const vibeStartLabelRef = useRef<HTMLSpanElement>(null);
+  const vibeEndLabelRef = useRef<HTMLSpanElement>(null);
+  const vibeDurLabelRef = useRef<HTMLSpanElement>(null);
   // Friends state
   const [friendsTab, setFriendsTab] = useState<'list'|'add'|'requests'>('list');
   const [friends, setFriends] = useState<any[]>([]);
@@ -105,6 +116,7 @@ export default function Dashboard() {
   const progressBarRef = useRef<HTMLDivElement>(null);
   const progressTrackRef = useRef<HTMLDivElement>(null);
   const timeCurrentRef = useRef<HTMLSpanElement>(null);
+  const mobileTimeRef = useRef<HTMLSpanElement>(null);
   const volumeBarRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -130,8 +142,11 @@ export default function Dashboard() {
   // Check authentication and fetch user
   useEffect(() => {
     const checkAuth = async () => {
-      // Check custom auth session
-      const response = await fetch('/api/custom-auth/me');
+      // Check custom auth session — send localStorage token as header for Capacitor WebView
+      const storedToken = localStorage.getItem('bov_session_token');
+      const response = await fetch('/api/custom-auth/me', {
+        headers: storedToken ? { 'Authorization': `Bearer ${storedToken}` } : {},
+      });
       const result = await response.json();
 
       if (!result.success || !result.user) {
@@ -289,12 +304,13 @@ export default function Dashboard() {
     if (!user) return;
     const interval = setInterval(() => {
       fetchFriends();
-    }, 3000);
+    }, 30000);
     return () => clearInterval(interval);
   }, [user, fetchFriends]);
 
   const handleLogout = async () => {
     await fetch('/api/custom-auth/logout', { method: 'POST' });
+    localStorage.removeItem('bov_session_token');
     router.push('/');
   };
 
@@ -409,10 +425,10 @@ export default function Dashboard() {
       const p = (audio.currentTime / audio.duration) * 100;
       const progressVal = isNaN(p) ? 0 : p;
       progressTrackRef.current.style.width = `${progressVal}%`;
-      if (timeCurrentRef.current) {
-        timeCurrentRef.current.innerText = formatTime(audio.currentTime);
-      }
-      
+      const t = formatTime(audio.currentTime);
+      if (timeCurrentRef.current) timeCurrentRef.current.innerText = t;
+      if (mobileTimeRef.current) mobileTimeRef.current.innerText = t;
+
       animationFrameRef.current = requestAnimationFrame(updateUI);
     };
 
@@ -666,6 +682,7 @@ export default function Dashboard() {
     setIsPlaying(true);
     if (progressTrackRef.current) progressTrackRef.current.style.width = '0%';
     if (timeCurrentRef.current) timeCurrentRef.current.innerText = '0:00';
+    if (mobileTimeRef.current) mobileTimeRef.current.innerText = '0:00';
 
     // Track play start
     trackPlay(song.id, false, 0);
@@ -1027,6 +1044,7 @@ export default function Dashboard() {
     // Optimistic UI update during native drag
     if (progressTrackRef.current) progressTrackRef.current.style.width = `${percent * 100}%`;
     if (timeCurrentRef.current) timeCurrentRef.current.innerText = formatTime(newTime);
+    if (mobileTimeRef.current) mobileTimeRef.current.innerText = formatTime(newTime);
   };
 
   const searchLower = debouncedSearch.trim().toLowerCase();
@@ -1051,7 +1069,7 @@ export default function Dashboard() {
       <motion.div
         initial={{ x: -300 }}
         animate={{ x: 0 }}
-        className="w-64 bg-black/40 backdrop-blur-xl border-r border-white/10 p-6 pb-40 flex flex-col overflow-y-auto"
+        className="hidden md:flex w-64 bg-black/40 backdrop-blur-xl border-r border-white/10 p-6 pb-40 flex-col overflow-y-auto"
       >
         {/* Logo */}
         <div className="flex items-center gap-4 mb-8">
@@ -1060,16 +1078,7 @@ export default function Dashboard() {
             <circle cx="50" cy="50" r="47" fill="url(#glowGrad)" opacity="0.6"/>
 
             {/* Rotating vinyl record */}
-            <g>
-              <animateTransform
-                attributeName="transform"
-                attributeType="XML"
-                type="rotate"
-                from="0 50 50"
-                to="360 50 50"
-                dur="3s"
-                repeatCount="indefinite"
-              />
+            <g className="vinyl-spin" style={{ transformOrigin: '50px 50px' }}>
 
               {/* Outer vinyl edge with border */}
               <circle cx="50" cy="50" r="45" fill="url(#vinylGrad)" stroke="url(#borderGrad)" strokeWidth="1.5"/>
@@ -1224,17 +1233,68 @@ export default function Dashboard() {
         <motion.div
           initial={{ y: -100 }}
           animate={{ y: 0 }}
-          className="bg-[#050505] border-b border-white/10 p-6 z-40"
+          className="bg-[#050505] border-b border-white/10 p-3 md:p-6 z-40"
         >
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            {/* Logo - mobile only */}
+            <div className="flex md:hidden items-center gap-2 flex-shrink-0">
+              <svg className="w-12 h-12" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="50" cy="50" r="47" fill="url(#mGlowGrad)" opacity="0.6"/>
+                <g className="vinyl-spin" style={{ transformOrigin: '50px 50px' }}>
+                  <circle cx="50" cy="50" r="45" fill="url(#mVinylGrad)" stroke="url(#mBorderGrad)" strokeWidth="1.5"/>
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="#3a3a3a" strokeWidth="0.5" opacity="0.5"/>
+                  <circle cx="50" cy="50" r="35" fill="none" stroke="#3a3a3a" strokeWidth="0.5" opacity="0.5"/>
+                  <circle cx="50" cy="50" r="30" fill="none" stroke="#3a3a3a" strokeWidth="0.5" opacity="0.5"/>
+                  <circle cx="50" cy="50" r="25" fill="none" stroke="#3a3a3a" strokeWidth="0.5" opacity="0.5"/>
+                  <circle cx="50" cy="50" r="18" fill="url(#mLabelGrad)"/>
+                  <rect x="45" y="5" width="10" height="90" rx="5" fill="url(#mShineGrad)" opacity="0.15"/>
+                  <circle cx="50" cy="50" r="4" fill="#1a1a1a"/>
+                </g>
+                <defs>
+                  <radialGradient id="mGlowGrad">
+                    <stop offset="0%" stopColor="#A855F7" stopOpacity="0.3"/>
+                    <stop offset="50%" stopColor="#EC4899" stopOpacity="0.2"/>
+                    <stop offset="100%" stopColor="#FB923C" stopOpacity="0"/>
+                  </radialGradient>
+                  <radialGradient id="mVinylGrad">
+                    <stop offset="0%" stopColor="#4a4a4a"/>
+                    <stop offset="70%" stopColor="#2a2a2a"/>
+                    <stop offset="100%" stopColor="#1a1a1a"/>
+                  </radialGradient>
+                  <linearGradient id="mBorderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#A855F7" stopOpacity="0.6"/>
+                    <stop offset="50%" stopColor="#EC4899" stopOpacity="0.6"/>
+                    <stop offset="100%" stopColor="#FB923C" stopOpacity="0.6"/>
+                  </linearGradient>
+                  <linearGradient id="mLabelGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#A855F7"/>
+                    <stop offset="50%" stopColor="#EC4899"/>
+                    <stop offset="100%" stopColor="#FB923C"/>
+                  </linearGradient>
+                  <linearGradient id="mShineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor="#ffffff" stopOpacity="0"/>
+                    <stop offset="50%" stopColor="#ffffff" stopOpacity="0.7"/>
+                    <stop offset="100%" stopColor="#ffffff" stopOpacity="0"/>
+                  </linearGradient>
+                </defs>
+              </svg>
+              <span className="text-xl font-semibold tracking-wide" style={{
+                background: 'linear-gradient(135deg, #A855F7, #EC4899, #FB923C)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+                fontFamily: 'system-ui, -apple-system, sans-serif',
+                letterSpacing: '0.05em',
+              }}>BoxOfVibe</span>
+            </div>
             <div className="flex-1 relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 md:w-5 md:h-5 text-gray-400" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search for songs, artists..."
-                className="w-full bg-white/10 border border-white/20 rounded-full pl-12 pr-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all"
+                className="w-full bg-white/10 border border-white/20 rounded-full pl-10 pr-4 py-1.5 md:py-3 text-sm md:text-base text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all"
               />
             </div>
             <div className="flex items-center gap-3">
@@ -1249,9 +1309,9 @@ export default function Dashboard() {
               <div className="relative" ref={profileRef}>
                 <button 
                   onClick={() => setShowProfileMenu(!showProfileMenu)}
-                  className="w-10 h-10 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center hover:shadow-lg hover:shadow-purple-500/50 transition-all"
+                  className="w-7 h-7 md:w-10 md:h-10 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center hover:shadow-lg hover:shadow-purple-500/50 transition-all"
                 >
-                  <User className="w-5 h-5 text-white" />
+                  <User className="w-3.5 h-3.5 md:w-5 md:h-5 text-white" />
                 </button>
                 
                 <AnimatePresence>
@@ -1331,9 +1391,9 @@ export default function Dashboard() {
         </motion.div>
 
         {/* Songs Library */}
-        <div className="flex-1 overflow-y-auto p-6 pb-40">
+        <div className="flex-1 overflow-y-auto p-3 md:p-6 pb-52 md:pb-40">
           <div className="mb-6">
-            <h1 className="text-3xl font-bold text-white mb-2">
+            <h1 className="text-xl md:text-3xl font-bold text-white mb-2">
               {activeTab === 'home' && 'Your Music Library'}
               {activeTab === 'liked' && 'Liked Songs'}
               {activeTab === 'playlists' && 'Your Playlists'}
@@ -1375,7 +1435,7 @@ export default function Dashboard() {
                 Back to Playlists
               </button>
 
-              <h2 className="text-2xl font-bold text-white mb-4">{selectedPlaylist.name}</h2>
+              <h2 className="text-lg md:text-2xl font-bold text-white mb-3 md:mb-4">{selectedPlaylist.name}</h2>
               <p className="text-gray-400 mb-6">{playlistSongs.length} songs</p>
 
               {playlistSongs.length === 0 ? (
@@ -1453,7 +1513,7 @@ export default function Dashboard() {
                               className={`transition-colors ${
                                 likedSongs.has(song.id)
                                   ? 'text-red-500 opacity-100'
-                                  : 'text-gray-400 hover:text-white opacity-0 group-hover:opacity-100'
+                                  : 'text-gray-400 hover:text-white opacity-100 md:opacity-0 md:group-hover:opacity-100'
                               }`}
                             >
                               <Heart className={`w-5 h-5 ${likedSongs.has(song.id) ? 'fill-current' : ''}`} />
@@ -1465,7 +1525,7 @@ export default function Dashboard() {
                                 e.stopPropagation();
                                 removeSongFromPlaylist(selectedPlaylist.id, song.id);
                               }}
-                              className="w-8 h-8 bg-red-500/20 text-red-400 rounded-lg flex items-center justify-center hover:bg-red-500/30 transition-all opacity-0 group-hover:opacity-100"
+                              className="w-8 h-8 bg-red-500/20 text-red-400 rounded-lg flex items-center justify-center hover:bg-red-500/30 transition-all opacity-100 md:opacity-0 md:group-hover:opacity-100"
                             >
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1564,7 +1624,7 @@ export default function Dashboard() {
                               setSongForPlaylistAdd(song);
                               setSelectedPlaylistsForAdd(new Set());
                             }}
-                            className="text-gray-400 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+                            className="text-gray-400 hover:text-white transition-colors opacity-100 md:opacity-0 md:group-hover:opacity-100"
                           >
                             <Plus className="w-5 h-5" />
                           </button>
@@ -1625,7 +1685,7 @@ export default function Dashboard() {
                             e.stopPropagation();
                             deletePlaylist(playlist.id);
                           }}
-                          className="w-8 h-8 bg-red-500/20 hover:bg-red-500/40 rounded-lg flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                          className="w-8 h-8 bg-red-500/20 hover:bg-red-500/40 rounded-lg flex items-center justify-center transition-colors opacity-100 md:opacity-0 md:group-hover:opacity-100"
                         >
                           <svg className="w-4 h-4 text-red-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1667,7 +1727,7 @@ export default function Dashboard() {
                       <User className="w-7 h-7 text-white" />
                     </div>
                     <div>
-                      <h2 className="text-2xl font-bold text-white">{viewingFriend.username}</h2>
+                      <h2 className="text-lg md:text-2xl font-bold text-white">{viewingFriend.username}</h2>
                       <p className="text-gray-400 text-sm">ID: #{viewingFriend.unique_code}</p>
                     </div>
                   </div>
@@ -1730,7 +1790,7 @@ export default function Dashboard() {
                       <ListMusic className="w-7 h-7 text-white" />
                     </div>
                     <div>
-                      <h2 className="text-2xl font-bold text-white">{viewingFriendPlaylist.name}</h2>
+                      <h2 className="text-lg md:text-2xl font-bold text-white">{viewingFriendPlaylist.name}</h2>
                       <p className="text-gray-400 text-sm">by {viewingFriend.username} • {friendPlaylistSongs.length} songs</p>
                     </div>
                   </div>
@@ -1772,7 +1832,7 @@ export default function Dashboard() {
                             </p>
                             <p className="text-gray-400 text-sm truncate">{song.artist}</p>
                           </div>
-                          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="flex items-center gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -2050,48 +2110,35 @@ export default function Dashboard() {
                         : 'border-white/5 bg-white/[0.02] hover:bg-white/5 hover:border-white/10'
                     }`}
                   >
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2 md:gap-4">
                       {/* Equalizer or Play Icon */}
-                      <div className="w-12 h-12 flex-shrink-0 relative">
+                      <div className="w-9 h-9 md:w-12 md:h-12 flex-shrink-0 relative">
                         {currentSong?.id === song.id ? (
                           <div className="w-full h-full flex items-center justify-center gap-0.5">
-                            {[...Array(4)].map((_, i) => (
-                              <motion.div
-                                key={i}
-                                className="w-1 bg-purple-400 rounded-full"
-                                animate={isPlaying ? {
-                                  height: [`40%`, `100%`, `60%`, `80%`, `40%`]
-                                } : {
-                                  height: '40%'
-                                }}
-                                transition={{
-                                  duration: 0.8,
-                                  repeat: isPlaying ? Infinity : 0,
-                                  ease: "easeInOut",
-                                  delay: i * 0.1
-                                }}
-                              />
-                            ))}
+                            <div className={`eq-bar ${isPlaying ? '' : 'eq-bar-paused'}`} />
+                            <div className={`eq-bar ${isPlaying ? '' : 'eq-bar-paused'}`} />
+                            <div className={`eq-bar ${isPlaying ? '' : 'eq-bar-paused'}`} />
+                            <div className={`eq-bar ${isPlaying ? '' : 'eq-bar-paused'}`} />
                           </div>
                         ) : (
                           <div className="w-full h-full rounded-lg bg-white/5 flex items-center justify-center opacity-60 group-hover:opacity-100 group-hover:bg-purple-500/20 transition-all">
-                            <Play className="w-5 h-5 text-gray-400 group-hover:text-purple-400 transition-colors" />
+                            <Play className="w-4 h-4 md:w-5 md:h-5 text-gray-400 group-hover:text-purple-400 transition-colors" />
                           </div>
                         )}
                       </div>
 
                       {/* Song Info */}
                       <div className="flex-1 min-w-0">
-                        <h3 className={`font-semibold truncate transition-colors ${
+                        <h3 className={`text-sm md:text-base font-semibold truncate transition-colors ${
                           currentSong?.id === song.id ? 'text-purple-300' : 'text-white group-hover:text-purple-200'
                         }`}>
                           {song.title}
                         </h3>
-                        <p className="text-gray-400 text-sm truncate">{song.artist}</p>
+                        <p className="text-gray-400 text-xs md:text-sm truncate">{song.artist}</p>
                       </div>
 
-                      {/* Duration */}
-                      <div className="text-gray-500 text-sm font-mono flex-shrink-0">
+                      {/* Duration - hidden on mobile to save space */}
+                      <div className="hidden md:block text-gray-500 text-sm font-mono flex-shrink-0">
                         {song.duration}
                       </div>
 
@@ -2103,28 +2150,20 @@ export default function Dashboard() {
                       </div>
 
                       {/* Action Buttons */}
-                      <div className="flex items-center gap-2 flex-shrink-0">
+                      <div className="flex items-center gap-3 flex-shrink-0 ml-2">
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleLike(song.id);
-                          }}
+                          onClick={(e) => { e.stopPropagation(); toggleLike(song.id); }}
                           className={`transition-colors ${
                             likedSongs.has(song.id)
                               ? 'text-red-500 opacity-100'
-                              : 'text-gray-400 hover:text-white opacity-0 group-hover:opacity-100'
+                              : 'text-gray-400 hover:text-white opacity-100 md:opacity-0 md:group-hover:opacity-100'
                           }`}
                         >
                           <Heart className={`w-5 h-5 ${likedSongs.has(song.id) ? 'fill-current' : ''}`} />
                         </button>
-
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSongForPlaylistAdd(song);
-                            setSelectedPlaylistsForAdd(new Set());
-                          }}
-                          className="text-gray-400 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+                          onClick={(e) => { e.stopPropagation(); setSongForPlaylistAdd(song); setSelectedPlaylistsForAdd(new Set()); }}
+                          className="text-gray-400 hover:text-white transition-colors opacity-100 md:opacity-0 md:group-hover:opacity-100"
                         >
                           <Plus className="w-5 h-5" />
                         </button>
@@ -2142,7 +2181,7 @@ export default function Dashboard() {
         <motion.div
           initial={{ y: 200 }}
           animate={{ y: 0 }}
-          className="absolute bottom-0 left-0 right-0 bg-gradient-to-r from-purple-900/90 via-black/90 to-pink-900/90 backdrop-blur-2xl border-t border-white/20 p-4"
+          className="fixed bottom-16 md:bottom-0 left-0 right-0 z-40 bg-gradient-to-r from-purple-900/90 via-black/90 to-pink-900/90 backdrop-blur-2xl border-t border-white/20 p-4"
         >
           <div className="max-w-screen-2xl mx-auto">
             {/* Progress Bar - Glowing Comet Trail */}
@@ -2166,7 +2205,7 @@ export default function Dashboard() {
                   {/* Clean playhead dot - Centered perfectly */}
                   <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-x-1/2 pointer-events-none z-10">
                     <div
-                      className="w-3 h-3 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.5)] opacity-0 group-hover:opacity-100 transition-all duration-200 border-2 border-purple-600"
+                      className="w-3 h-3 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.5)] opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-all duration-200 border-2 border-purple-600"
                     />
                     {isPlaying && (
                       <div
@@ -2194,87 +2233,148 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-4">
+            {/* ── MOBILE layout (hidden on md+) ─────────────────── */}
+            <div className="flex flex-col gap-1.5 md:hidden">
+              {/* Row 1: Song info + like + add */}
+              <div className="flex items-center gap-2 min-w-0">
+                {currentSong ? (
+                  <>
+                    {/* Mini vinyl */}
+                    <div className="w-9 h-9 rounded-md flex-shrink-0 relative bg-gradient-to-br from-purple-600 to-pink-500 p-0.5">
+                      <div className="w-full h-full bg-black/90 rounded-md flex items-center justify-center overflow-hidden">
+                        <div
+                          className={`w-6 h-6 rounded-full border border-gray-700 flex items-center justify-center ${isPlaying ? 'vinyl-spin' : ''}`}
+                          style={{ background: 'conic-gradient(from 0deg, #111, #333, #111, #333, #111)' }}
+                        >
+                          <div className="w-2 h-2 rounded-full bg-gradient-to-br from-purple-500 to-pink-500">
+                            <div className="w-0.5 h-0.5 bg-black rounded-full mx-auto mt-[3px]" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-white text-sm font-semibold truncate leading-tight">{currentSong.title}</p>
+                      <p className="text-gray-400 text-xs truncate leading-tight">{currentSong.artist}</p>
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleLike(currentSong.id); }}
+                        className={`transition-colors ${likedSongs.has(currentSong.id) ? 'text-red-500' : 'text-gray-400'}`}
+                      >
+                        <Heart className={`w-5 h-5 ${likedSongs.has(currentSong.id) ? 'fill-current' : ''}`} />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setShowPlayerAddToPlaylist(true); setSelectedPlaylistsForAdd(new Set()); }}
+                        className="text-gray-400"
+                      >
+                        <Plus className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-gray-500 text-xs">No song selected</p>
+                )}
+              </div>
+
+              {/* Row 2: Playback controls — play button always dead-center */}
+              <div className="flex items-center">
+                {/* Left side: Shuffle + Prev */}
+                <div className="flex items-center gap-4 flex-1 justify-end pr-5">
+                  <button onClick={toggleShuffle} className={`transition-colors ${isShuffle ? 'text-purple-400' : 'text-gray-500'}`}>
+                    <Shuffle className="w-4 h-4" />
+                  </button>
+                  <button onClick={skipPrevious} className="text-white">
+                    <SkipBack className="w-5 h-5" />
+                  </button>
+                </div>
+                {/* Center: Play */}
+                <button onClick={togglePlay} className="w-10 h-10 bg-white rounded-full flex items-center justify-center flex-shrink-0">
+                  {isPlaying ? <Pause className="w-4 h-4 text-black" /> : <Play className="w-4 h-4 text-black ml-0.5" />}
+                </button>
+                {/* Right side: Next + Repeat + CustomLoop + VibeLoop */}
+                <div className="flex items-center gap-4 flex-1 justify-start pl-5">
+                  <button onClick={skipNext} className="text-white">
+                    <SkipForward className="w-5 h-5" />
+                  </button>
+                  <button onClick={() => setIsRepeat(!isRepeat)} className={`transition-colors ${isRepeat ? 'text-purple-400' : 'text-gray-500'}`}>
+                    <Repeat className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (activeTab === 'liked') {
+                        const liked = songs.filter(s => likedSongs.has(s.id));
+                        setCustomLoopSource(liked);
+                      } else if (selectedPlaylist && playlistSongs.length > 0) {
+                        setCustomLoopSource(playlistSongs);
+                      } else {
+                        setCustomLoopSource(currentQueue.length > 0 ? currentQueue : songs);
+                      }
+                      setCustomLoopSearch('');
+                      setShowCustomLoop(!showCustomLoop);
+                    }}
+                    className={`transition-colors ${isCustomLoopActive ? 'text-purple-400' : 'text-gray-500'}`}
+                    title={isCustomLoopActive ? `Custom Loop (${customLoopQueue.length} songs)` : 'Custom Loop'}
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setShowVibeLoop(true)}
+                    className={`relative transition-colors ${isVibeLoopActive ? 'text-purple-400' : 'text-gray-500'}`}
+                    title="Vibe Loop"
+                  >
+                    <Scissors className="w-4 h-4" />
+                    {isVibeLoopActive && <span className="absolute -top-1 -right-1 w-2 h-2 bg-purple-400 rounded-full animate-pulse" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Row 3: Time */}
+              <div className="flex items-center justify-center gap-1.5 text-[10px] text-gray-400 font-mono">
+                <span ref={mobileTimeRef}>0:00</span>
+                <span className="text-gray-600">/</span>
+                <span>{currentSong?.duration || '0:00'}</span>
+              </div>
+            </div>
+
+            {/* ── DESKTOP layout (hidden below md) ──────────────── */}
+            <div className="hidden md:flex items-center justify-between gap-4">
               {/* Current Song Info */}
               <div className="flex items-center gap-4 flex-1 min-w-0">
                 {currentSong ? (
                   <>
                     <div className="w-14 h-14 rounded-lg flex-shrink-0 relative bg-gradient-to-br from-purple-600 via-purple-500 to-pink-500 p-0.5">
-                      {/* Inner container */}
                       <div className="w-full h-full bg-black/90 rounded-lg relative overflow-hidden flex items-center justify-center">
-                        {/* Smooth Spinning Vinyl Record */}
-                        <motion.div
-                          className="w-10 h-10 rounded-full border-2 border-gray-800 flex items-center justify-center relative shadow-[inset_0_0_10px_rgba(0,0,0,1)]"
-                          style={{
-                            background: 'conic-gradient(from 0deg, #111, #333, #111, #333, #111)'
-                          }}
-                          animate={isPlaying ? { rotate: 360 } : { rotate: 0 }}
-                          transition={isPlaying ? { duration: 3, repeat: Infinity, ease: "linear" } : { duration: 0.5, ease: "easeOut" }}
+                        <div
+                          className={`w-10 h-10 rounded-full border-2 border-gray-800 flex items-center justify-center relative shadow-[inset_0_0_10px_rgba(0,0,0,1)] ${isPlaying ? 'vinyl-spin' : ''}`}
+                          style={{ background: 'conic-gradient(from 0deg, #111, #333, #111, #333, #111)' }}
                         >
-                          {/* Inner Record Label */}
                           <div className="w-3 h-3 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 shadow-inner flex items-center justify-center">
                             <div className="w-1 h-1 bg-black rounded-full" />
                           </div>
-                          
-                          {/* Grooves */}
                           <div className="absolute inset-1 rounded-full border border-white/5" />
                           <div className="absolute inset-2 rounded-full border border-white/5" />
-                        </motion.div>
-
-                        {/* Pulsing Border Glow */}
-                        <motion.div
-                          className="absolute inset-0 rounded-lg"
-                          style={{
-                            boxShadow: isPlaying
-                              ? '0 0 15px rgba(168, 85, 247, 0.4), inset 0 0 15px rgba(236, 72, 153, 0.2)'
-                              : '0 0 5px rgba(168, 85, 247, 0.1)'
-                          }}
-                          animate={isPlaying ? {
-                            boxShadow: [
-                              '0 0 15px rgba(168, 85, 247, 0.4), inset 0 0 15px rgba(236, 72, 153, 0.2)',
-                              '0 0 25px rgba(236, 72, 153, 0.6), inset 0 0 25px rgba(168, 85, 247, 0.3)',
-                              '0 0 15px rgba(168, 85, 247, 0.4), inset 0 0 15px rgba(236, 72, 153, 0.2)'
-                            ]
-                          } : {}}
-                          transition={{
-                            duration: 3,
-                            repeat: isPlaying ? Infinity : 0,
-                            ease: "easeInOut"
-                          }}
+                        </div>
+                        <div
+                          className="absolute inset-0 rounded-lg transition-shadow duration-700"
+                          style={{ boxShadow: isPlaying ? '0 0 15px rgba(168, 85, 247, 0.4), inset 0 0 15px rgba(236, 72, 153, 0.2)' : '0 0 5px rgba(168, 85, 247, 0.1)' }}
                         />
                       </div>
-
-                      {/* Corner Accents */}
                       <div className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-gradient-to-br from-purple-400 to-pink-400 blur-sm" />
                       <div className="absolute -bottom-1 -left-1 w-2 h-2 rounded-full bg-gradient-to-br from-pink-400 to-purple-400 blur-sm" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <h4 className="text-white font-semibold truncate">
-                        {currentSong.title}
-                      </h4>
-                      <p className="text-gray-400 text-sm truncate">
-                        {currentSong.artist}
-                      </p>
+                      <h4 className="text-white font-semibold truncate">{currentSong.title}</h4>
+                      <p className="text-gray-400 text-sm truncate">{currentSong.artist}</p>
                     </div>
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleLike(currentSong.id);
-                      }}
-                      className={`transition-colors flex-shrink-0 ${
-                        likedSongs.has(currentSong.id) ? 'text-red-500' : 'text-gray-400 hover:text-white'
-                      }`}
+                      onClick={(e) => { e.stopPropagation(); toggleLike(currentSong.id); }}
+                      className={`transition-colors flex-shrink-0 ${likedSongs.has(currentSong.id) ? 'text-red-500' : 'text-gray-400 hover:text-white'}`}
                     >
                       <Heart className={`w-5 h-5 ${likedSongs.has(currentSong.id) ? 'fill-current' : ''}`} />
                     </button>
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowPlayerAddToPlaylist(true);
-                        setSelectedPlaylistsForAdd(new Set());
-                      }}
+                      onClick={(e) => { e.stopPropagation(); setShowPlayerAddToPlaylist(true); setSelectedPlaylistsForAdd(new Set()); }}
                       className="text-gray-400 hover:text-white transition-colors flex-shrink-0"
-                      title="Add to playlists"
                     >
                       <Plus className="w-5 h-5" />
                     </button>
@@ -2287,52 +2387,23 @@ export default function Dashboard() {
               {/* Player Controls */}
               <div className="flex flex-col items-center gap-2 flex-1 max-w-md">
                 <div className="flex items-center gap-4">
-                  <button
-                    onClick={toggleShuffle}
-                    className={`transition-colors ${
-                      isShuffle ? 'text-purple-400' : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
+                  <button onClick={toggleShuffle} className={`transition-colors ${isShuffle ? 'text-purple-400' : 'text-gray-400 hover:text-white'}`}>
                     <Shuffle className="w-4 h-4" />
                   </button>
-
-                  <button
-                    onClick={skipPrevious}
-                    className="text-white hover:scale-110 transition-transform"
-                  >
+                  <button onClick={skipPrevious} className="text-white hover:scale-110 transition-transform">
                     <SkipBack className="w-5 h-5" />
                   </button>
-
-                  <button
-                    onClick={togglePlay}
-                    className="w-12 h-12 bg-white rounded-full flex items-center justify-center hover:scale-110 transition-transform"
-                  >
-                    {isPlaying ? (
-                      <Pause className="w-5 h-5 text-black" />
-                    ) : (
-                      <Play className="w-5 h-5 text-black ml-1" />
-                    )}
+                  <button onClick={togglePlay} className="w-12 h-12 bg-white rounded-full flex items-center justify-center hover:scale-110 transition-transform">
+                    {isPlaying ? <Pause className="w-5 h-5 text-black" /> : <Play className="w-5 h-5 text-black ml-1" />}
                   </button>
-
-                  <button
-                    onClick={skipNext}
-                    className="text-white hover:scale-110 transition-transform"
-                  >
+                  <button onClick={skipNext} className="text-white hover:scale-110 transition-transform">
                     <SkipForward className="w-5 h-5" />
                   </button>
-
-                  <button
-                    onClick={() => setIsRepeat(!isRepeat)}
-                    className={`transition-colors ${
-                      isRepeat ? 'text-purple-400' : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
+                  <button onClick={() => setIsRepeat(!isRepeat)} className={`transition-colors ${isRepeat ? 'text-purple-400' : 'text-gray-400 hover:text-white'}`}>
                     <Repeat className="w-4 h-4" />
                   </button>
-
                   <button
                     onClick={() => {
-                      // Fix: use context-aware source
                       if (activeTab === 'liked') {
                         const liked = songs.filter(s => likedSongs.has(s.id));
                         setCustomLoopSource(liked);
@@ -2344,29 +2415,20 @@ export default function Dashboard() {
                       setCustomLoopSearch('');
                       setShowCustomLoop(!showCustomLoop);
                     }}
-                    className={`transition-colors ${
-                      isCustomLoopActive ? 'text-purple-400' : 'text-gray-400 hover:text-white'
-                    }`}
+                    className={`transition-colors ${isCustomLoopActive ? 'text-purple-400' : 'text-gray-400 hover:text-white'}`}
                     title={isCustomLoopActive ? `Custom Loop (${customLoopQueue.length} songs)` : 'Custom Loop'}
                   >
                     <List className="w-4 h-4" />
                   </button>
-
-                  {/* Vibe Loop Button */}
                   <button
                     onClick={() => setShowVibeLoop(true)}
-                    className={`transition-colors relative ${
-                      isVibeLoopActive ? 'text-orange-400' : 'text-gray-400 hover:text-white'
-                    }`}
-                    title="Vibe Loop – loop a segment"
+                    className={`transition-colors relative ${isVibeLoopActive ? 'text-purple-400' : 'text-gray-400 hover:text-white'}`}
+                    title="Vibe Loop"
                   >
                     <Scissors className="w-4 h-4" />
-                    {isVibeLoopActive && (
-                      <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-400 rounded-full animate-pulse" />
-                    )}
+                    {isVibeLoopActive && <span className="absolute -top-1 -right-1 w-2 h-2 bg-purple-400 rounded-full animate-pulse" />}
                   </button>
                 </div>
-
                 <div className="flex items-center justify-center gap-2 text-sm text-gray-300 font-mono mt-1 -ml-8">
                   <span ref={timeCurrentRef} className="w-[45px] text-right">0:00</span>
                   <span className="text-gray-500">/</span>
@@ -2376,39 +2438,21 @@ export default function Dashboard() {
 
               {/* Volume Control */}
               <div className="flex items-center gap-3 flex-1 justify-end">
-                <button
-                  onClick={() => setIsMuted(!isMuted)}
-                  className="text-gray-400 hover:text-white transition-colors"
-                >
-                  {isMuted || volume === 0 ? (
-                    <VolumeX className="w-5 h-5" />
-                  ) : (
-                    <Volume2 className="w-5 h-5" />
-                  )}
+                <button onClick={() => setIsMuted(!isMuted)} className="text-gray-400 hover:text-white transition-colors">
+                  {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
                 </button>
-                <div
-                  ref={volumeBarRef}
-                  className="w-24 bg-white/20 rounded-full h-1 relative group flex flex-col justify-center"
-                >
+                <div ref={volumeBarRef} className="w-24 bg-white/20 rounded-full h-1 relative group flex flex-col justify-center">
                   <motion.div
                     className="bg-white h-full rounded-full absolute left-0 top-0 pointer-events-none transition-[width] duration-100 linear"
                     style={{ width: `${volume}%` }}
                     transition={{ type: "tween", duration: 0 }}
                   >
-                    <div 
-                      className="absolute top-1/2 right-0 -translate-y-1/2 translate-x-1/2 pointer-events-none" 
-                    >
-                      <div className="w-3 h-3 bg-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-[0_0_8px_rgba(255,255,255,0.5)] border-2 border-white" />
+                    <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-x-1/2 pointer-events-none">
+                      <div className="w-3 h-3 bg-white rounded-full opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity shadow-[0_0_8px_rgba(255,255,255,0.5)] border-2 border-white" />
                     </div>
                   </motion.div>
-                  
-                  {/* Native Range Slider - Invisible but interactive overlay */}
                   <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="1"
-                    value={volume}
+                    type="range" min="0" max="100" step="1" value={volume}
                     onChange={handleVolumeChange}
                     onMouseDown={() => setIsDraggingVolume(true)}
                     onMouseUp={() => setIsDraggingVolume(false)}
@@ -2422,6 +2466,41 @@ export default function Dashboard() {
           </div>
         </motion.div>
       </div>
+
+      {/* Mobile Bottom Nav */}
+      <nav className="fixed bottom-0 left-0 right-0 h-16 bg-black/95 backdrop-blur-xl border-t border-white/10 flex md:hidden items-center justify-around z-50 px-2">
+        <button
+          onClick={() => setActiveTab('home')}
+          className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl transition-colors ${activeTab === 'home' ? 'text-purple-400' : 'text-gray-500'}`}
+        >
+          <Home className="w-5 h-5" />
+          <span className="text-[10px]">Home</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('liked')}
+          className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl transition-colors ${activeTab === 'liked' ? 'text-purple-400' : 'text-gray-500'}`}
+        >
+          <Heart className="w-5 h-5" />
+          <span className="text-[10px]">Liked</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('playlists')}
+          className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl transition-colors ${activeTab === 'playlists' ? 'text-purple-400' : 'text-gray-500'}`}
+        >
+          <ListMusic className="w-5 h-5" />
+          <span className="text-[10px]">Playlists</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('friends')}
+          className={`relative flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl transition-colors ${activeTab === 'friends' ? 'text-purple-400' : 'text-gray-500'}`}
+        >
+          <Users className="w-5 h-5" />
+          <span className="text-[10px]">Friends</span>
+          {friendRequestCount > 0 && (
+            <span className="absolute top-1 right-1 w-2 h-2 bg-pink-500 rounded-full" />
+          )}
+        </button>
+      </nav>
 
       {/* Create Playlist Modal */}
       <AnimatePresence>
@@ -2438,9 +2517,9 @@ export default function Dashboard() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-2xl p-8 max-w-md w-full mx-4"
+              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-xl md:rounded-2xl p-4 md:p-8 max-w-md w-full mx-3 md:mx-4"
             >
-              <h2 className="text-2xl font-bold text-white mb-6">Create New Playlist</h2>
+              <h2 className="text-lg md:text-2xl font-bold text-white mb-4 md:mb-6">Create New Playlist</h2>
 
               <div>
                 <label className="block text-gray-400 text-sm mb-2">Playlist Name</label>
@@ -2492,9 +2571,9 @@ export default function Dashboard() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-2xl p-8 max-w-md w-full mx-4"
+              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-xl md:rounded-2xl p-4 md:p-8 max-w-md w-full mx-3 md:mx-4"
             >
-              <h2 className="text-2xl font-bold text-white mb-2">Add to Playlists</h2>
+              <h2 className="text-lg md:text-2xl font-bold text-white mb-2">Add to Playlists</h2>
               <p className="text-gray-400 text-sm mb-6">
                 Select playlists to add &quot;{currentSong.title}&quot;
               </p>
@@ -2594,9 +2673,9 @@ export default function Dashboard() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-2xl p-8 max-w-md w-full mx-4"
+              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-xl md:rounded-2xl p-4 md:p-8 max-w-md w-full mx-3 md:mx-4"
             >
-              <h2 className="text-2xl font-bold text-white mb-2">Add to Playlists</h2>
+              <h2 className="text-lg md:text-2xl font-bold text-white mb-2">Add to Playlists</h2>
               <p className="text-gray-400 text-sm mb-6">
                 Select playlists to add &quot;{songForPlaylistAdd.title}&quot;
               </p>
@@ -2698,6 +2777,8 @@ export default function Dashboard() {
             className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
             onClick={() => {
               setShowCustomLoop(false);
+              setAddingToLoop(false);
+              setAddToLoopSelection(new Set());
               if (!isCustomLoopActive) setCustomLoopSelection(new Set());
             }}
           >
@@ -2706,17 +2787,41 @@ export default function Dashboard() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-2xl p-8 max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col"
+              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-xl md:rounded-2xl p-4 md:p-8 max-w-2xl w-full mx-3 md:mx-4 max-h-[80vh] overflow-hidden flex flex-col"
             >
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-2xl font-bold text-white">Custom Loop</h2>
-                  <p className="text-gray-400 text-sm mt-1">
-                    {isCustomLoopActive ? `Looping ${customLoopQueue.length} selected songs` :
-                     `Select from: ${selectedPlaylist ? selectedPlaylist.name : activeTab === 'liked' ? 'Liked Songs' : 'All Songs'} (${customLoopSource.length} songs)`}
-                  </p>
+              {/* Header */}
+              <div className="mb-4">
+                <div className="flex items-center justify-between mb-3">
+                  {addingToLoop ? (
+                    <button
+                      onClick={() => { setAddingToLoop(false); setAddToLoopSelection(new Set()); setCustomLoopSearch(''); }}
+                      className="text-gray-400 hover:text-white transition-colors flex-shrink-0 flex items-center gap-1 text-sm"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                      Back
+                    </button>
+                  ) : (
+                    <div className="w-12" />
+                  )}
+                  <h2 className="text-xl md:text-3xl font-bold bg-gradient-to-r from-purple-400 via-pink-400 to-orange-400 bg-clip-text text-transparent text-center flex-1">
+                    {addingToLoop ? 'Add Songs' : 'Custom Loop'}
+                  </h2>
+                  <button
+                    onClick={() => {
+                      setShowCustomLoop(false);
+                      setAddingToLoop(false);
+                      setAddToLoopSelection(new Set());
+                      if (!isCustomLoopActive) setCustomLoopSelection(new Set());
+                    }}
+                    className="text-gray-400 hover:text-white transition-colors flex-shrink-0"
+                  >
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
-                {/* Search inside custom loop */}
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input
@@ -2724,115 +2829,174 @@ export default function Dashboard() {
                     value={customLoopSearch}
                     onChange={e => setCustomLoopSearch(e.target.value)}
                     placeholder="Search..."
-                    className="pl-9 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                    className="w-full pl-9 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
                   />
                 </div>
-                <button
-                  onClick={() => {
-                    setShowCustomLoop(false);
-                    if (!isCustomLoopActive) {
-                      setCustomLoopSelection(new Set());
-                    }
-                  }}
-                  className="text-gray-400 hover:text-white transition-colors"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto space-y-2 mb-4 mt-4">
-                {(customLoopSource.length > 0 ? customLoopSource : currentQueue)
+              {/* Song list */}
+              <div className="flex-1 overflow-y-auto space-y-2 mb-4 mt-2">
+
+                {/* ── Active loop view ── */}
+                {isCustomLoopActive && !addingToLoop && customLoopQueue
                   .filter(song => customLoopSearch === '' || song.title.toLowerCase().includes(customLoopSearch.toLowerCase()) || song.artist.toLowerCase().includes(customLoopSearch.toLowerCase()))
                   .map((song, index) => (
-                  <motion.div
+                  <div
                     key={song.id}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.2 }}
-                    onClick={() => {
-                      if (isCustomLoopActive) {
-                        // If loop is active, clicking plays the song
-                        const loopIndex = customLoopQueue.findIndex(s => s.id === song.id);
-                        if (loopIndex >= 0) {
-                          setCurrentSong(song);
-                          setIsPlaying(true);
-                          trackPlay(song.id, false, 0);
-                          setShowCustomLoop(false);
-                        }
-                      } else {
-                        // If loop is not active, clicking toggles selection
-                        setCustomLoopSelection(prev => {
-                          const newSelection = new Set(prev);
-                          if (newSelection.has(song.id)) {
-                            newSelection.delete(song.id);
-                          } else {
-                            newSelection.add(song.id);
-                          }
-                          return newSelection;
-                        });
-                      }
-                    }}
-                    className={`group flex items-center gap-4 p-3 rounded-lg cursor-pointer transition-all ${
-                      isCustomLoopActive && customLoopQueue.find(s => s.id === song.id) && currentSong?.id === song.id
+                    className={`group flex items-center gap-3 p-3 rounded-lg transition-all ${
+                      currentSong?.id === song.id
                         ? 'bg-purple-500/20 border border-purple-500/50'
-                        : customLoopSelection.has(song.id)
-                        ? 'bg-purple-500/10 border border-purple-500/30'
                         : 'bg-white/5 hover:bg-white/10 border border-transparent'
                     }`}
                   >
-                    {!isCustomLoopActive && (
-                      <div className="flex-shrink-0">
-                        <input
-                          type="checkbox"
-                          checked={customLoopSelection.has(song.id)}
-                          onChange={() => {}}
-                          className="w-4 h-4 rounded border-gray-600 text-purple-500 focus:ring-purple-500 focus:ring-offset-0 cursor-pointer"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </div>
-                    )}
-
-                    <div className="flex-shrink-0 w-8 text-center">
-                      {isCustomLoopActive && customLoopQueue.find(s => s.id === song.id) && currentSong?.id === song.id ? (
-                        <div className="flex items-center justify-center">
-                          <div className={`w-3 h-3 bg-purple-500 rounded-full ${isPlaying ? 'animate-pulse' : ''}`}></div>
-                        </div>
+                    <div className="flex-shrink-0 w-6 text-center">
+                      {currentSong?.id === song.id ? (
+                        <div className={`w-3 h-3 bg-purple-500 rounded-full mx-auto ${isPlaying ? 'animate-pulse' : ''}`} />
                       ) : (
                         <span className="text-gray-400 text-sm">{index + 1}</span>
                       )}
                     </div>
-
-                    <div className="flex-1 min-w-0">
-                      <p className={`font-medium truncate ${
-                        (isCustomLoopActive && customLoopQueue.find(s => s.id === song.id) && currentSong?.id === song.id) || customLoopSelection.has(song.id)
-                          ? 'text-purple-300'
-                          : 'text-white'
-                      }`}>
-                        {song.title}
-                      </p>
+                    <div
+                      className="flex-1 min-w-0 cursor-pointer"
+                      onClick={() => {
+                        setCurrentSong(song);
+                        setIsPlaying(true);
+                        trackPlay(song.id, false, 0);
+                        setShowCustomLoop(false);
+                      }}
+                    >
+                      <p className={`font-medium truncate ${currentSong?.id === song.id ? 'text-purple-300' : 'text-white'}`}>{song.title}</p>
                       <p className="text-gray-400 text-sm truncate">{song.artist}</p>
                     </div>
+                    <span className="text-gray-400 text-sm flex-shrink-0">{song.duration}</span>
+                    {/* Remove button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const newQueue = customLoopQueue.filter(s => s.id !== song.id);
+                        if (newQueue.length === 0) {
+                          setIsCustomLoopActive(false);
+                          setCustomLoopQueue([]);
+                          setShowCustomLoop(false);
+                          showNotification('info', 'Custom loop cleared');
+                          return;
+                        }
+                        setCustomLoopQueue(newQueue);
+                        // If removing the currently playing song, jump to next
+                        if (currentSong?.id === song.id) {
+                          const nextSong = newQueue[index] || newQueue[0];
+                          setCurrentSong(nextSong);
+                          setIsPlaying(true);
+                          trackPlay(nextSong.id, false, 0);
+                        }
+                        showNotification('info', `Removed "${song.title}"`);
+                      }}
+                      className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                      title="Remove from loop"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
 
-                    <div className="flex-shrink-0 text-gray-400 text-sm">
-                      {song.duration}
+                {/* ── Add-to-loop view ── */}
+                {addingToLoop && (customLoopSource.length > 0 ? customLoopSource : currentQueue)
+                  .filter(song => !customLoopQueue.find(s => s.id === song.id))
+                  .filter(song => customLoopSearch === '' || song.title.toLowerCase().includes(customLoopSearch.toLowerCase()) || song.artist.toLowerCase().includes(customLoopSearch.toLowerCase()))
+                  .map((song, index) => (
+                  <div
+                    key={song.id}
+                    onClick={() => setAddToLoopSelection(prev => {
+                      const next = new Set(prev);
+                      if (next.has(song.id)) next.delete(song.id); else next.add(song.id);
+                      return next;
+                    })}
+                    className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${
+                      addToLoopSelection.has(song.id)
+                        ? 'bg-purple-500/10 border border-purple-500/30'
+                        : 'bg-white/5 hover:bg-white/10 border border-transparent'
+                    }`}
+                  >
+                    <div className="flex-shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={addToLoopSelection.has(song.id)}
+                        onChange={() => {}}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setAddToLoopSelection(prev => {
+                            const next = new Set(prev);
+                            if (next.has(song.id)) next.delete(song.id); else next.add(song.id);
+                            return next;
+                          });
+                        }}
+                        className="w-4 h-4 rounded border-gray-600 text-purple-500 focus:ring-purple-500 focus:ring-offset-0 cursor-pointer"
+                      />
                     </div>
-                  </motion.div>
-                  ))}
+                    <span className="text-gray-400 text-sm w-6 text-center flex-shrink-0">{index + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className={`font-medium truncate ${addToLoopSelection.has(song.id) ? 'text-purple-300' : 'text-white'}`}>{song.title}</p>
+                      <p className="text-gray-400 text-sm truncate">{song.artist}</p>
+                    </div>
+                    <span className="text-gray-400 text-sm flex-shrink-0">{song.duration}</span>
+                  </div>
+                ))}
+
+                {/* ── Initial selection view (loop not active) ── */}
+                {!isCustomLoopActive && !addingToLoop && (customLoopSource.length > 0 ? customLoopSource : currentQueue)
+                  .filter(song => customLoopSearch === '' || song.title.toLowerCase().includes(customLoopSearch.toLowerCase()) || song.artist.toLowerCase().includes(customLoopSearch.toLowerCase()))
+                  .map((song, index) => (
+                  <div
+                    key={song.id}
+                    onClick={() => setCustomLoopSelection(prev => {
+                      const next = new Set(prev);
+                      if (next.has(song.id)) next.delete(song.id); else next.add(song.id);
+                      return next;
+                    })}
+                    className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${
+                      customLoopSelection.has(song.id)
+                        ? 'bg-purple-500/10 border border-purple-500/30'
+                        : 'bg-white/5 hover:bg-white/10 border border-transparent'
+                    }`}
+                  >
+                    <div className="flex-shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={customLoopSelection.has(song.id)}
+                        onChange={() => {}}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCustomLoopSelection(prev => {
+                            const next = new Set(prev);
+                            if (next.has(song.id)) next.delete(song.id); else next.add(song.id);
+                            return next;
+                          });
+                        }}
+                        className="w-4 h-4 rounded border-gray-600 text-purple-500 focus:ring-purple-500 focus:ring-offset-0 cursor-pointer"
+                      />
+                    </div>
+                    <span className="text-gray-400 text-sm w-6 text-center flex-shrink-0">{index + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className={`font-medium truncate ${customLoopSelection.has(song.id) ? 'text-purple-300' : 'text-white'}`}>{song.title}</p>
+                      <p className="text-gray-400 text-sm truncate">{song.artist}</p>
+                    </div>
+                    <span className="text-gray-400 text-sm flex-shrink-0">{song.duration}</span>
+                  </div>
+                ))}
               </div>
 
-              {!isCustomLoopActive && (
+              {/* Bottom actions */}
+
+              {/* Initial setup */}
+              {!isCustomLoopActive && !addingToLoop && (
                 <div className="flex gap-3 pt-4 border-t border-white/10">
                   <button
                     onClick={() => {
                       const src = customLoopSource.length > 0 ? customLoopSource : currentQueue;
                       const allSelected = customLoopSelection.size === src.length;
-                      if (allSelected) {
-                        setCustomLoopSelection(new Set());
-                      } else {
-                        setCustomLoopSelection(new Set(src.map(s => s.id)));
-                      }
+                      setCustomLoopSelection(allSelected ? new Set() : new Set(src.map(s => s.id)));
                     }}
                     className="px-4 py-2 bg-white/5 text-gray-300 rounded-lg text-sm hover:bg-white/10 transition-all border border-white/10"
                   >
@@ -2840,25 +3004,19 @@ export default function Dashboard() {
                   </button>
                   <button
                     onClick={() => {
-                      if (customLoopSelection.size === 0) {
-                        showNotification('error', 'Please select at least one song');
-                        return;
-                      }
+                      if (customLoopSelection.size === 0) { showNotification('error', 'Please select at least one song'); return; }
                       const src = customLoopSource.length > 0 ? customLoopSource : currentQueue;
                       const selectedSongs = src.filter(s => customLoopSelection.has(s.id));
                       setCustomLoopQueue(selectedSongs);
                       setIsCustomLoopActive(true);
-
-                      // Start playing the first song from the custom loop immediately
                       if (selectedSongs.length > 0) {
                         setCurrentSong(selectedSongs[0]);
                         setIsPlaying(true);
                         if (progressTrackRef.current) progressTrackRef.current.style.width = '0%';
                         if (timeCurrentRef.current) timeCurrentRef.current.innerText = '0:00';
+                        if (mobileTimeRef.current) mobileTimeRef.current.innerText = '0:00';
                         trackPlay(selectedSongs[0].id, false, 0);
-                        addDebugLog(`Started custom loop with ${selectedSongs.length} songs`);
                       }
-
                       setShowCustomLoop(false);
                       showNotification('success', `Looping ${selectedSongs.length} songs`);
                     }}
@@ -2870,8 +3028,9 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {isCustomLoopActive && (
-                <div className="flex gap-3 pt-4 border-t border-white/10">
+              {/* Active loop actions */}
+              {isCustomLoopActive && !addingToLoop && (
+                <div className="flex gap-2 pt-4 border-t border-white/10">
                   <button
                     onClick={() => {
                       setIsCustomLoopActive(false);
@@ -2880,15 +3039,52 @@ export default function Dashboard() {
                       setShowCustomLoop(false);
                       showNotification('info', 'Custom loop disabled');
                     }}
-                    className="flex-1 px-4 py-3 bg-red-500/20 text-red-300 rounded-lg font-medium hover:bg-red-500/30 transition-all border border-red-500/50"
+                    className="px-3 py-2.5 bg-red-500/20 text-red-300 rounded-lg text-sm font-medium hover:bg-red-500/30 transition-all border border-red-500/50"
                   >
-                    Clear Loop
+                    Clear
+                  </button>
+                  <button
+                    onClick={() => { setAddingToLoop(true); setCustomLoopSearch(''); }}
+                    className="flex-1 px-3 py-2.5 bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-300 rounded-lg text-sm font-medium hover:from-purple-500/30 hover:to-pink-500/30 transition-all border border-purple-500/30 flex items-center justify-center gap-1.5"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    Add Songs
                   </button>
                   <button
                     onClick={() => setShowCustomLoop(false)}
-                    className="flex-1 px-4 py-3 bg-white/5 text-white rounded-lg font-medium hover:bg-white/10 transition-all border border-white/10"
+                    className="px-3 py-2.5 bg-white/5 text-white rounded-lg text-sm font-medium hover:bg-white/10 transition-all border border-white/10"
                   >
                     Close
+                  </button>
+                </div>
+              )}
+
+              {/* Add-to-loop confirm */}
+              {addingToLoop && (
+                <div className="flex gap-3 pt-4 border-t border-white/10">
+                  <button
+                    onClick={() => { setAddingToLoop(false); setAddToLoopSelection(new Set()); setCustomLoopSearch(''); }}
+                    className="px-4 py-2.5 bg-white/5 text-gray-300 rounded-lg text-sm hover:bg-white/10 transition-all border border-white/10"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (addToLoopSelection.size === 0) { showNotification('error', 'Select at least one song'); return; }
+                      const src = customLoopSource.length > 0 ? customLoopSource : currentQueue;
+                      const toAdd = src.filter(s => addToLoopSelection.has(s.id));
+                      setCustomLoopQueue(prev => [...prev, ...toAdd]);
+                      setAddingToLoop(false);
+                      setAddToLoopSelection(new Set());
+                      setCustomLoopSearch('');
+                      showNotification('success', `Added ${toAdd.length} song${toAdd.length > 1 ? 's' : ''} to loop`);
+                    }}
+                    disabled={addToLoopSelection.size === 0}
+                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg font-medium hover:shadow-lg hover:shadow-purple-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Add ({addToLoopSelection.size} selected)
                   </button>
                 </div>
               )}
@@ -2899,7 +3095,12 @@ export default function Dashboard() {
 
       {/* Vibe Loop Modal */}
       <AnimatePresence>
-        {showVibeLoop && currentSong && (
+        {showVibeLoop && currentSong && (() => {
+          // Sync drag refs to current state when modal opens
+          vibeDragStart.current = vibeLoopStart;
+          vibeDragEnd.current = vibeLoopEnd;
+          return true;
+        })() && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -2912,13 +3113,13 @@ export default function Dashboard() {
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-gradient-to-br from-gray-900 to-black border border-orange-500/30 rounded-2xl p-8 max-w-lg w-full mx-4"
+              className="bg-gradient-to-br from-gray-900 to-black border border-purple-500/30 rounded-xl md:rounded-2xl p-4 md:p-8 max-w-lg w-full mx-3 md:mx-4"
             >
               <div className="flex items-center justify-between mb-6">
                 <div>
-                  <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-                    <Scissors className="w-6 h-6 text-orange-400" />
-                    Vibe Loop
+                  <h2 className="text-lg md:text-2xl font-bold flex items-center gap-2">
+                    <Scissors className="w-6 h-6 text-purple-400" />
+                    <span className="bg-gradient-to-r from-purple-400 via-pink-400 to-orange-400 bg-clip-text text-transparent">Vibe Loop</span>
                   </h2>
                   <p className="text-gray-400 text-sm mt-1">Select the part you want to loop</p>
                 </div>
@@ -2934,33 +3135,53 @@ export default function Dashboard() {
 
               {/* Segment bar */}
               <div className="mb-8 mt-4">
-                <div 
+                <div
                   className="relative w-full h-8 flex items-center cursor-pointer touch-none select-none mb-4"
                   ref={vibeTrackRef}
                   onPointerDown={(e) => {
                     if (!vibeTrackRef.current) return;
+                    e.currentTarget.setPointerCapture(e.pointerId);
                     const rect = vibeTrackRef.current.getBoundingClientRect();
                     const percent = ((e.clientX - rect.left) / rect.width) * 100;
-                    const distStart = Math.abs(percent - vibeLoopStart);
-                    const distEnd = Math.abs(percent - vibeLoopEnd);
+                    const distStart = Math.abs(percent - vibeDragStart.current);
+                    const distEnd = Math.abs(percent - vibeDragEnd.current);
                     setVibeDraggingHandle(distStart < distEnd ? 'start' : 'end');
                   }}
                   onPointerMove={(e) => {
                     if (!vibeDraggingHandle || !vibeTrackRef.current) return;
                     const rect = vibeTrackRef.current.getBoundingClientRect();
-                    let percent = ((e.clientX - rect.left) / rect.width) * 100;
-                    percent = Math.max(0, Math.min(100, Math.round(percent * 2) / 2));
-                    
+                    let pct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+                    pct = Math.round(pct);
+
+                    let s = vibeDragStart.current;
+                    let en = vibeDragEnd.current;
                     if (vibeDraggingHandle === 'start') {
-                      setVibeLoopStart(Math.min(percent, vibeLoopEnd - 1));
+                      s = Math.min(pct, en - 1);
+                      vibeDragStart.current = s;
                     } else {
-                      setVibeLoopEnd(Math.max(percent, vibeLoopStart + 1));
+                      en = Math.max(pct, s + 1);
+                      vibeDragEnd.current = en;
                     }
-                    
-                    // Jump to START of loop region and play
+
+                    // Update DOM directly — zero React re-renders during drag
+                    if (vibeHighlightRef.current) {
+                      vibeHighlightRef.current.style.left = `${s}%`;
+                      vibeHighlightRef.current.style.width = `${en - s}%`;
+                    }
+                    if (vibeStartThumbRef.current) vibeStartThumbRef.current.style.left = `${s}%`;
+                    if (vibeEndThumbRef.current) vibeEndThumbRef.current.style.left = `${en}%`;
+                    if (vibeStartLabelRef.current) vibeStartLabelRef.current.textContent = formatPercentToTime(s);
+                    if (vibeEndLabelRef.current) vibeEndLabelRef.current.textContent = formatPercentToTime(en);
+                    if (vibeDurLabelRef.current) vibeDurLabelRef.current.textContent = `LOOPING ${formatPercentToTime(en - s)}`;
+                  }}
+                  onPointerUp={() => {
+                    // Commit to React state once on release
+                    setVibeLoopStart(vibeDragStart.current);
+                    setVibeLoopEnd(vibeDragEnd.current);
+                    setVibeDraggingHandle(null);
+                    // Preview: jump to start of selected region so user can hear it
                     if (audioRef.current && audioRef.current.duration) {
-                      const startTime = Math.min(vibeLoopStart, vibeLoopEnd - 1);
-                      const startSeconds = (startTime / 100) * audioRef.current.duration;
+                      const startSeconds = (vibeDragStart.current / 100) * audioRef.current.duration;
                       audioRef.current.currentTime = startSeconds;
                       if (!isPlaying) {
                         audioRef.current.play().catch(console.error);
@@ -2968,45 +3189,45 @@ export default function Dashboard() {
                       }
                     }
                   }}
-                  onPointerUp={() => {
-                    if (vibeDraggingHandle) {
-                      setVibeDraggingHandle(null);
-                    }
-                  }}
                   onPointerLeave={() => {
                     if (vibeDraggingHandle) {
+                      setVibeLoopStart(vibeDragStart.current);
+                      setVibeLoopEnd(vibeDragEnd.current);
                       setVibeDraggingHandle(null);
                     }
                   }}
                 >
                   {/* Track base */}
                   <div className="absolute w-full h-2 bg-white/10 rounded-full" />
-                  
+
                   {/* Highlight */}
                   <div
-                    className="absolute h-2 bg-orange-500/80 pointer-events-none"
+                    ref={vibeHighlightRef}
+                    className="absolute h-2 bg-gradient-to-r from-purple-500 to-pink-500 pointer-events-none"
                     style={{ left: `${vibeLoopStart}%`, width: `${vibeLoopEnd - vibeLoopStart}%` }}
                   />
 
                   {/* Start Thumb */}
                   <div
+                    ref={vibeStartThumbRef}
                     onPointerDown={(e) => { e.stopPropagation(); setVibeDraggingHandle('start'); }}
-                    className={`absolute w-6 h-6 bg-white border-[6px] border-orange-500 rounded-full shadow-[0_0_10px_rgba(249,115,22,0.8)] -ml-3 transition-transform ${vibeDraggingHandle === 'start' ? 'scale-125' : 'hover:scale-110'}`}
+                    className="absolute w-6 h-6 bg-white border-[6px] border-purple-500 rounded-full shadow-[0_0_10px_rgba(168,85,247,0.8)] -ml-3"
                     style={{ left: `${vibeLoopStart}%` }}
                   />
 
                   {/* End Thumb */}
                   <div
+                    ref={vibeEndThumbRef}
                     onPointerDown={(e) => { e.stopPropagation(); setVibeDraggingHandle('end'); }}
-                    className={`absolute w-6 h-6 bg-white border-[6px] border-orange-500 rounded-full shadow-[0_0_10px_rgba(249,115,22,0.8)] -ml-3 transition-transform ${vibeDraggingHandle === 'end' ? 'scale-125' : 'hover:scale-110'}`}
+                    className="absolute w-6 h-6 bg-white border-[6px] border-purple-500 rounded-full shadow-[0_0_10px_rgba(168,85,247,0.8)] -ml-3"
                     style={{ left: `${vibeLoopEnd}%` }}
                   />
                 </div>
-                
+
                 <div className="flex justify-between text-xs text-gray-400 mt-2 px-1 text-center font-mono">
-                  <span className="w-16 text-left">START<br/><b className="text-white">{formatPercentToTime(vibeLoopStart)}</b></span>
-                  <span className="text-orange-400 mt-2"><b>LOOPING {formatPercentToTime(vibeLoopEnd - vibeLoopStart)}</b></span>
-                  <span className="w-16 text-right">END<br/><b className="text-white">{formatPercentToTime(vibeLoopEnd)}</b></span>
+                  <span className="w-16 text-left">START<br/><b ref={vibeStartLabelRef} className="text-white">{formatPercentToTime(vibeLoopStart)}</b></span>
+                  <span ref={vibeDurLabelRef} className="text-pink-400 mt-2"><b>LOOPING {formatPercentToTime(vibeLoopEnd - vibeLoopStart)}</b></span>
+                  <span className="w-16 text-right">END<br/><b ref={vibeEndLabelRef} className="text-white">{formatPercentToTime(vibeLoopEnd)}</b></span>
                 </div>
               </div>
 
@@ -3035,7 +3256,7 @@ export default function Dashboard() {
                     setShowVibeLoop(false);
                     showNotification('success', 'Vibe Loop activated!');
                   }}
-                  className="flex-1 px-4 py-3 bg-gradient-to-r from-orange-500 to-pink-500 text-white rounded-lg font-medium hover:shadow-lg hover:shadow-orange-500/30 transition-all"
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white rounded-lg font-medium hover:shadow-lg hover:shadow-purple-500/30 transition-all"
                 >
                   🎵 Activate Vibe Loop
                 </button>
@@ -3060,9 +3281,9 @@ export default function Dashboard() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-2xl p-8 max-w-md w-full mx-4"
+              className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-xl md:rounded-2xl p-4 md:p-8 max-w-md w-full mx-3 md:mx-4"
             >
-              <h2 className="text-2xl font-bold text-white mb-2">Copy Playlist</h2>
+              <h2 className="text-lg md:text-2xl font-bold text-white mb-2">Copy Playlist</h2>
               <p className="text-gray-400 text-sm mb-6">Give this playlist a name in your library</p>
               <input
                 type="text"
@@ -3125,7 +3346,7 @@ export default function Dashboard() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-gradient-to-br from-gray-900 to-black border border-red-500/30 rounded-2xl p-6 max-w-sm w-full mx-4"
+              className="bg-gradient-to-br from-gray-900 to-black border border-red-500/30 rounded-xl md:rounded-2xl p-4 md:p-6 max-w-sm w-full mx-3 md:mx-4"
             >
               <div className="text-center mb-6">
                 <div className="w-14 h-14 rounded-full bg-red-500/20 flex items-center justify-center mx-auto mb-4">
@@ -3173,20 +3394,20 @@ export default function Dashboard() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
-            className="fixed bottom-44 right-6 z-50"
+            className="fixed bottom-64 md:bottom-44 right-3 md:right-6 z-50 max-w-[180px] md:max-w-sm"
           >
-            <div className={`bg-gradient-to-br from-gray-900 to-black border rounded-xl p-4 shadow-lg max-w-sm ${
+            <div className={`bg-gradient-to-br from-gray-900 to-black border rounded-lg md:rounded-xl p-2.5 md:p-4 shadow-lg ${
               notification.type === 'success'
                 ? 'border-green-500/50 shadow-green-500/10'
                 : notification.type === 'error'
                 ? 'border-red-500/50 shadow-red-500/10'
                 : 'border-blue-500/50 shadow-blue-500/10'
             }`}>
-              <div className="flex items-center gap-3">
-                <span className="text-2xl">
+              <div className="flex items-center gap-2">
+                <span className="text-sm md:text-2xl flex-shrink-0">
                   {notification.type === 'success' ? '✅' : notification.type === 'error' ? '❌' : 'ℹ️'}
                 </span>
-                <p className={`font-medium text-sm ${
+                <p className={`font-medium text-xs md:text-sm leading-tight ${
                   notification.type === 'success'
                     ? 'text-green-200'
                     : notification.type === 'error'

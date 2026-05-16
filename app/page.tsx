@@ -45,6 +45,11 @@ export default function Home() {
         throw new Error(result.error || 'Failed to log in');
       }
 
+      // Save token to localStorage so Capacitor WebView can persist it
+      if (result.sessionToken) {
+        localStorage.setItem('bov_session_token', result.sessionToken);
+      }
+
       router.push('/dashboard');
     } catch (error: any) {
       setError(error.message || 'Failed to log in');
@@ -74,6 +79,11 @@ export default function Home() {
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to sign up');
+      }
+
+      // Save token to localStorage so Capacitor WebView can persist it
+      if (result.sessionToken) {
+        localStorage.setItem('bov_session_token', result.sessionToken);
       }
 
       // Account created successfully, redirect to dashboard
@@ -133,16 +143,7 @@ export default function Home() {
             >
               <svg className="w-32 h-32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="50" cy="50" r="47" fill="url(#glowGrad)" opacity="0.6"/>
-                <g>
-                  <animateTransform
-                    attributeName="transform"
-                    attributeType="XML"
-                    type="rotate"
-                    from="0 50 50"
-                    to="360 50 50"
-                    dur="3s"
-                    repeatCount="indefinite"
-                  />
+                <g className="vinyl-spin" style={{ transformOrigin: '50px 50px' }}>
                   <circle cx="50" cy="50" r="45" fill="url(#vinylGrad)" stroke="url(#borderGrad)" strokeWidth="1.5"/>
                   <circle cx="50" cy="50" r="40" fill="none" stroke="#3a3a3a" strokeWidth="0.5" opacity="0.5"/>
                   <circle cx="50" cy="50" r="35" fill="none" stroke="#3a3a3a" strokeWidth="0.5" opacity="0.5"/>
@@ -254,16 +255,7 @@ export default function Home() {
               <div className="flex items-center justify-center mb-8">
                 <svg className="w-24 h-24" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <circle cx="50" cy="50" r="47" fill="url(#glowGrad2)" opacity="0.6"/>
-                  <g>
-                    <animateTransform
-                      attributeName="transform"
-                      attributeType="XML"
-                      type="rotate"
-                      from="0 50 50"
-                      to="360 50 50"
-                      dur="3s"
-                      repeatCount="indefinite"
-                    />
+                  <g className="vinyl-spin" style={{ transformOrigin: '50px 50px' }}>
                     <circle cx="50" cy="50" r="45" fill="url(#vinylGrad2)" stroke="url(#borderGrad2)" strokeWidth="1.5"/>
                     <circle cx="50" cy="50" r="40" fill="none" stroke="#3a3a3a" strokeWidth="0.5" opacity="0.5"/>
                     <circle cx="50" cy="50" r="35" fill="none" stroke="#3a3a3a" strokeWidth="0.5" opacity="0.5"/>

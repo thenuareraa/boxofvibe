@@ -8,7 +8,10 @@ const supabase = createClient(
 
 export async function GET(request: NextRequest) {
   try {
-    const sessionToken = request.cookies.get('session_token')?.value;
+    // Accept token from cookie OR Authorization header (for Capacitor WebView)
+    const sessionToken =
+      request.cookies.get('session_token')?.value ||
+      request.headers.get('Authorization')?.replace('Bearer ', '');
 
     if (!sessionToken) {
       return NextResponse.json(
