@@ -106,6 +106,7 @@ export default function Dashboard() {
   const [customLoopSource, setCustomLoopSource] = useState<Song[]>([]);
   const [vibeDraggingHandle, setVibeDraggingHandle] = useState<string | null>(null);
   const [notification, setNotification] = useState<{show: boolean; type: 'success'|'error'|'info'; message: string}>({show: false, type: 'success', message: ''});
+  const [mounted, setMounted] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const preloadRef = useRef<HTMLAudioElement>(null);
@@ -138,6 +139,9 @@ export default function Dashboard() {
     setNotification({ show: true, type, message });
     setTimeout(() => setNotification({ show: false, type: 'success', message: '' }), 3000);
   };
+
+  // Mount guard — prevents ANY server-side rendering
+  useEffect(() => { setMounted(true); }, []);
 
   // Check authentication and fetch user
   useEffect(() => {
@@ -655,6 +659,9 @@ export default function Dashboard() {
       song.title.toLowerCase().includes(searchLower) ||
       song.artist.toLowerCase().includes(searchLower)
   );
+
+  // Don't render anything on the server — client only
+  if (!mounted) return <div className="min-h-screen bg-black" />;
 
   return (
     <div className="h-screen bg-gradient-to-br from-gray-900 via-black to-purple-900 flex overflow-hidden">
