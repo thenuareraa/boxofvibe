@@ -1,6 +1,7 @@
 [build]
   command = "npm run build"
   publish = ".next"
+  ignore = "git diff --quiet HEAD^ HEAD -- . ':(exclude)android/'"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"

@@ -37,6 +37,13 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase, type Song } from '@/lib/supabase';
+import { registerPlugin, Capacitor } from '@capacitor/core';
+
+const MusicNotification = registerPlugin<{
+  update(opts: { title: string; artist: string; coverUrl: string | null; isPlaying: boolean }): Promise<void>;
+  stop(): Promise<void>;
+  addListener(event: 'notificationAction', handler: (data: { action: string }) => void): Promise<{ remove: () => void }>;
+}>('MusicNotification');
 
 export default function Dashboard() {
   const router = useRouter();
@@ -118,7 +125,9 @@ export default function Dashboard() {
   const [friendPlaylistSongsCache, setFriendPlaylistSongsCache] = useState<Record<number, Song[]>>({});
   const [removeFriendConfirm, setRemoveFriendConfirm] = useState<any | null>(null);
 
-  const audioRef = useRef<HTMLAudioElement>(null);
+  const audioElA = useRef<HTMLAudioElement | null>(null);
+  const audioElB = useRef<HTMLAudioElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const progressTrackRef = useRef<HTMLDivElement>(null);
   const timeCurrentRef = useRef<HTMLSpanElement>(null);
@@ -130,6 +139,18 @@ export default function Dashboard() {
   const customLoopActiveRef = useRef(isCustomLoopActive);
   const customLoopQueueRef = useRef(customLoopQueue);
 
+  // Init double-buffer audio slots
+  useEffect(() => {
+    audioRef.current = audioElA.current;
+    preloadRef.current = audioElB.current;
+  }, []);
+
+  const swapAudioSlots = () => {
+    const tmp = audioRef.current;
+    audioRef.current = preloadRef.current;
+    preloadRef.current = tmp;
+  };
+
   // Keep refs in sync with state
   useEffect(() => {
     customLoopActiveRef.current = isCustomLoopActive;
@@ -138,6 +159,57 @@ export default function Dashboard() {
   useEffect(() => {
     customLoopQueueRef.current = customLoopQueue;
   }, [customLoopQueue]);
+
+  // SERVICE WORKER: register once on mount
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+  }, []);
+
+  const swSend = (msg: object) => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+    const send = (sw: ServiceWorker) => sw.postMessage(msg);
+    if (navigator.serviceWorker.controller) {
+      send(navigator.serviceWorker.controller);
+    } else {
+      navigator.serviceWorker.ready.then(reg => { if (reg.active) send(reg.active); });
+    }
+  };
+
+  // Register all audio URLs with SW so it can intercept R2 URLs without .mp3 extension
+  useEffect(() => {
+    if (songs.length === 0) return;
+    swSend({ type: 'REGISTER_URLS', urls: songs.map(s => s.file_url).filter(Boolean) });
+  }, [songs]);
+
+  // Pre-cache next 1 song fully when current song changes
+  useEffect(() => {
+    if (!currentSong) return;
+    const activeQueue = currentQueue.length > 0 ? currentQueue : songs;
+    const idx = activeQueue.findIndex(s => s.id === currentSong.id);
+    const next = activeQueue[(idx + 1) % activeQueue.length];
+    if (next?.file_url) {
+      swSend({ type: 'PRECACHE_FULL', urls: [next.file_url] });
+    }
+  }, [currentSong]);
+
+  // IntersectionObserver: pre-cache first 300KB of songs as they scroll into view
+  const songListRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('IntersectionObserver' in window)) return;
+    const observer = new IntersectionObserver(entries => {
+      const visible = entries
+        .filter(e => e.isIntersecting)
+        .map(e => (e.target as HTMLElement).dataset.fileUrl)
+        .filter(Boolean) as string[];
+      if (visible.length > 0) swSend({ type: 'PRECACHE_CHUNK', urls: visible });
+    }, { rootMargin: '200px' });
+
+    const container = songListRef.current;
+    if (!container) return;
+    container.querySelectorAll('[data-file-url]').forEach(el => observer.observe(el));
+    return () => observer.disconnect();
+  }, [songs]);
 
   const addDebugLog = (message: string) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -361,19 +433,27 @@ export default function Dashboard() {
 
     const audio = audioRef.current;
 
-    // Always stop previous playback to prevent audio bleed
+    // After a slot swap the element is already playing the right song — just restore volume
+    if (audio.src === currentSong.file_url && !audio.paused) {
+      audio.volume = volume / 100;
+      addDebugLog(`Slot swap — already playing: ${currentSong.title}`);
+      return;
+    }
+
+    // Stop any bleed from previous element
     audio.pause();
     audio.currentTime = 0;
 
-    // If the preload swap already loaded this song's data, skip reloading — play immediately
+    // Preloaded and ready — play instantly without reloading
     if (audio.src === currentSong.file_url && audio.readyState >= 2) {
+      audio.volume = volume / 100;
       addDebugLog(`Preloaded — instant play: ${currentSong.title}`);
       if (isPlaying) audio.play().catch(() => {});
       return;
     }
 
     audio.src = currentSong.file_url;
-    // Play as soon as first bytes arrive — don't wait for full buffer
+    audio.volume = volume / 100;
     audio.play().catch(() => {});
     addDebugLog(`Loading song: ${currentSong.title}`);
   }, [currentSong]);
@@ -393,24 +473,27 @@ export default function Dashboard() {
 
     const currentIndex = activeQueue.findIndex((s) => s.id === currentSong.id);
 
-    // Preload next 3 songs in background
-    for (let i = 1; i <= 3; i++) {
-      const nextIndex = currentIndex >= 0 ? (currentIndex + i) % activeQueue.length : i - 1;
-      const nextSong = activeQueue[nextIndex];
+    // Primary preload: buffer element gets the immediate next song
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % activeQueue.length : 0;
+    const nextSong = activeQueue[nextIndex];
+    if (nextSong && nextSong.id !== currentSong.id) {
+      preloadRef.current.src = nextSong.file_url;
+      preloadRef.current.load();
+      addDebugLog(`Preloading next: ${nextSong.title}`);
+    }
 
-      if (nextSong && nextSong.id !== currentSong.id) {
-        if (i === 1) {
-          // Primary preload - next song
-          preloadRef.current.src = nextSong.file_url;
-          preloadRef.current.load();
-          addDebugLog(`Preloading next song: ${nextSong.title}`);
-        } else {
-          // Additional preloading in background
-          const bgAudio = new Audio();
-          bgAudio.preload = 'auto';
-          bgAudio.src = nextSong.file_url;
-          bgAudio.load();
-        }
+    // Also preload prev + next 2-5 as background Audio objects
+    const extraIndices = [-1, 2, 3, 4, 5];
+    for (const offset of extraIndices) {
+      const idx = currentIndex >= 0
+        ? (currentIndex + offset + activeQueue.length) % activeQueue.length
+        : 0;
+      const s = activeQueue[idx];
+      if (s && s.id !== currentSong.id && s.id !== nextSong?.id) {
+        const bg = new Audio();
+        bg.preload = 'auto';
+        bg.src = s.file_url;
+        bg.load();
       }
     }
   }, [currentSong, queueIndex, currentQueue, isShuffle, shuffleQueue, isCustomLoopActive, customLoopQueue]);
@@ -719,16 +802,16 @@ export default function Dashboard() {
     const index = queue.findIndex(s => s.id === song.id);
     setQueueIndex(index >= 0 ? index : 0);
 
-    // INSTANT PLAYBACK: Use preloaded audio if available
+    // Immediately silence current audio to prevent any bleed
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.volume = 0; }
+
+    // INSTANT PLAYBACK: if song is preloaded, play that element directly
     if (preloadRef.current && preloadRef.current.src === song.file_url && preloadRef.current.readyState >= 2) {
-      if (audioRef.current) {
-        // Swap the preloaded audio to main player
-        const tempSrc = audioRef.current.src;
-        audioRef.current.src = preloadRef.current.src;
-        audioRef.current.currentTime = 0;
-        preloadRef.current.src = tempSrc; // Old song becomes preload buffer
-        addDebugLog('Using preloaded audio for instant click play!');
-      }
+      preloadRef.current.currentTime = 0;
+      preloadRef.current.volume = volume / 100;
+      preloadRef.current.play().catch(() => {});
+      swapAudioSlots();
+      addDebugLog('Instant click play via slot swap!');
     }
 
     setCurrentSong(song);
@@ -759,16 +842,16 @@ export default function Dashboard() {
     const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % activeQueue.length : 0;
     const nextSong = activeQueue[nextIndex];
 
-    // INSTANT PLAYBACK: Use preloaded audio if available
+    // Immediately silence current audio
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.volume = 0; }
+
+    // INSTANT PLAYBACK: play preloaded element directly via slot swap
     if (preloadRef.current && preloadRef.current.src === nextSong.file_url && preloadRef.current.readyState >= 2) {
-      if (audioRef.current) {
-        // Swap the preloaded audio to main player
-        const tempSrc = audioRef.current.src;
-        audioRef.current.src = preloadRef.current.src;
-        audioRef.current.currentTime = 0;
-        preloadRef.current.src = tempSrc; // Old song becomes preload buffer
-        addDebugLog('Using preloaded audio for instant skip!');
-      }
+      preloadRef.current.currentTime = 0;
+      preloadRef.current.volume = volume / 100;
+      preloadRef.current.play().catch(() => {});
+      swapAudioSlots();
+      addDebugLog('Instant skip via slot swap!');
     }
 
     setCurrentSong(nextSong);
@@ -782,6 +865,9 @@ export default function Dashboard() {
 
   const skipPrevious = () => {
     if (!currentSong) return;
+
+    // Immediately silence current audio to prevent bleed
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.volume = 0; }
 
     // Track partial play of current song
     if (audioRef.current) {
@@ -838,6 +924,33 @@ export default function Dashboard() {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
     navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
   }, [isPlaying]);
+
+  // ANDROID NOTIFICATION PLAYER
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    if (!currentSong) {
+      MusicNotification.stop().catch(() => {});
+      return;
+    }
+    MusicNotification.update({
+      title: currentSong.title,
+      artist: currentSong.artist || 'BoxOfVibe',
+      coverUrl: currentSong.cover_url || null,
+      isPlaying,
+    }).catch(() => {});
+  }, [currentSong, isPlaying]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let cleanup: (() => void) | null = null;
+    MusicNotification.addListener('notificationAction', ({ action }) => {
+      if (action === 'play')  setIsPlaying(true);
+      if (action === 'pause') setIsPlaying(false);
+      if (action === 'next')  skipNext();
+      if (action === 'prev')  skipPrevious();
+    }).then(handle => { cleanup = handle.remove; });
+    return () => { cleanup?.(); };
+  }, []);
 
   // SLEEP TIMER: countdown tick
   useEffect(() => {
@@ -1217,14 +1330,8 @@ export default function Dashboard() {
   return (
     <div className="h-screen bg-gradient-to-br from-gray-900 via-black to-purple-900 flex overflow-hidden">
       {/* Hidden Audio Elements */}
-      <audio
-        ref={audioRef}
-        preload="auto"
-        crossOrigin="anonymous"
-        playsInline
-        autoPlay={false}
-      />
-      <audio ref={preloadRef} preload="none" crossOrigin="anonymous" style={{ display: 'none' }} />
+      <audio ref={audioElA} preload="auto" crossOrigin="anonymous" playsInline />
+      <audio ref={audioElB} preload="auto" crossOrigin="anonymous" style={{ display: 'none' }} />
       {/* Sidebar */}
       <motion.div
         initial={{ x: -300 }}
@@ -2260,10 +2367,12 @@ export default function Dashboard() {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2, ease: "easeOut" }}
               className="space-y-1"
+              ref={songListRef}
             >
                 {filteredSongs.map((song, index) => (
                   <div
                     key={song.id}
+                    data-file-url={song.file_url}
                     onClick={() => handleSongClick(song)}
                     onMouseEnter={() => handleSongHover(song)}
                     className={`group relative rounded-lg px-4 py-3 border transition-all duration-300 ease-out cursor-pointer ${
@@ -2443,13 +2552,13 @@ export default function Dashboard() {
                 {/* Left side: Sleep + Shuffle + Prev */}
                 <div className="flex items-center gap-4 flex-1 justify-end pr-5">
                   {/* Sleep Timer button */}
-                  <div className="relative">
+                  <div className="relative flex items-center">
                     <button
                       onClick={() => sleepRemaining !== null || sleepEndOfSong ? cancelSleepTimer() : setShowSleepTimer(s => !s)}
-                      className={`relative transition-colors ${sleepRemaining !== null || sleepEndOfSong ? 'text-purple-400' : 'text-gray-500'}`}
+                      className={`transition-colors flex items-center justify-center ${sleepRemaining !== null || sleepEndOfSong ? 'text-purple-400' : 'text-gray-500'}`}
                     >
                       <Moon className="w-4 h-4" />
-                      <span className="absolute top-full left-1/2 -translate-x-1/2 mt-0.5 text-[9px] leading-none font-mono whitespace-nowrap">
+                      <span className="absolute top-full left-1/2 -translate-x-1/2 mt-0.5 text-[9px] leading-none font-mono whitespace-nowrap pointer-events-none">
                         {sleepTimerLabel() ?? ''}
                       </span>
                     </button>
