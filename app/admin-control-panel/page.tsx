@@ -5,6 +5,7 @@ import {
   Music, Upload, Trash2, Users, Disc, ArrowLeft, Plus, X, Check,
   BarChart3, Settings, TrendingUp, Download, Eye, Clock, HardDrive,
   Activity, Signal, Database, Edit, UserX, PlayCircle, Calendar, FileText,
+  Radio, RefreshCw, Zap, ToggleLeft, ToggleRight, AlertCircle,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase, type Song } from '@/lib/supabase';
@@ -16,6 +17,8 @@ export default function AdminPanel() {
   const [showUploadForm, setShowUploadForm] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [selectedSong, setSelectedSong] = useState<any>(null);
+  const [songPlayStats, setSongPlayStats] = useState<{username: string; count: number; last_played: string}[]>([]);
+  const [loadingPlayStats, setLoadingPlayStats] = useState(false);
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -35,6 +38,15 @@ export default function AdminPanel() {
   const [selectedSongsToDelete, setSelectedSongsToDelete] = useState<number[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [uploadQueue, setUploadQueue] = useState<File[]>([]);
+
+  // Discover tab state
+  const [pendingSongs, setPendingSongs] = useState<any[]>([]);
+  const [loadingDiscover, setLoadingDiscover] = useState(false);
+  const [discoverFilter, setDiscoverFilter] = useState<'all' | 'spotify' | 'shazam' | 'trending'>('all');
+  const [selectedPending, setSelectedPending] = useState<number[]>([]);
+  const [downloading, setDownloading] = useState(false);
+  const [exploreEnabled, setExploreEnabled] = useState(false);
+  const [togglingExplore, setTogglingExplore] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
   const [notification, setNotification] = useState<{
     show: boolean;
@@ -48,6 +60,76 @@ export default function AdminPanel() {
     setTimeout(() => {
       setNotification({ show: false, type, message: '' });
     }, 5000);
+  };
+
+  // Fetch per-user play stats via server-side API (uses service role key, bypasses RLS)
+  const fetchSongPlayStats = async (songId: number) => {
+    setLoadingPlayStats(true);
+    setSongPlayStats([]);
+    try {
+      const res = await fetch(`/api/admin/song-play-stats?song_id=${songId}`);
+      const data = await res.json();
+      if (data.stats) setSongPlayStats(data.stats);
+    } catch { /* silently ignore */ }
+    setLoadingPlayStats(false);
+  };
+
+  const fetchPendingSongs = async () => {
+    setLoadingDiscover(true);
+    try {
+      const res = await fetch('/api/admin/pending-songs');
+      const data = await res.json();
+      if (data.songs) setPendingSongs(data.songs);
+    } catch { /* ignore */ }
+    setLoadingDiscover(false);
+  };
+
+  const fetchExploreToggle = async () => {
+    try {
+      const res = await fetch('/api/admin/explore-toggle');
+      const data = await res.json();
+      if (typeof data.enabled === 'boolean') setExploreEnabled(data.enabled);
+    } catch { /* ignore */ }
+  };
+
+  const handleToggleExplore = async () => {
+    setTogglingExplore(true);
+    try {
+      const res = await fetch('/api/admin/explore-toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !exploreEnabled }),
+      });
+      const data = await res.json();
+      if (typeof data.enabled === 'boolean') setExploreEnabled(data.enabled);
+      showNotification('success', `Explore tab ${data.enabled ? 'enabled' : 'disabled'} for users`);
+    } catch {
+      showNotification('error', 'Failed to update Explore setting');
+    }
+    setTogglingExplore(false);
+  };
+
+  const handleDownloadSelected = async () => {
+    if (selectedPending.length === 0) {
+      showNotification('error', 'Select at least one song to download');
+      return;
+    }
+    setDownloading(true);
+    try {
+      const res = await fetch('/api/download-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ song_ids: selectedPending }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Download failed');
+      showNotification('success', `Download started for ${selectedPending.length} song${selectedPending.length > 1 ? 's' : ''}. Check status in a few minutes.`);
+      setSelectedPending([]);
+      setTimeout(fetchPendingSongs, 2000);
+    } catch (err: any) {
+      showNotification('error', err.message);
+    }
+    setDownloading(false);
   };
 
   // No authentication required - secret URL access only
@@ -97,6 +179,13 @@ export default function AdminPanel() {
 
     fetchUsers();
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (activeTab === 'discover') {
+      fetchPendingSongs();
+      fetchExploreToggle();
+    }
+  }, [activeTab]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -311,7 +400,7 @@ export default function AdminPanel() {
             initial={{ opacity: 0, y: -50, x: '-50%' }}
             animate={{ opacity: 1, y: 0, x: '-50%' }}
             exit={{ opacity: 0, y: -50, x: '-50%' }}
-            className={`fixed top-4 left-1/2 z-50 px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 min-w-[400px] backdrop-blur-xl border ${
+            className={`fixed top-4 left-1/2 z-50 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 w-[90vw] max-w-[500px] backdrop-blur-xl border ${
               notification.type === 'success'
                 ? 'bg-green-500/20 border-green-500/50 text-green-400'
                 : notification.type === 'error'
@@ -337,12 +426,12 @@ export default function AdminPanel() {
       <motion.div
         initial={{ y: -100 }}
         animate={{ y: 0 }}
-        className="bg-black/40 backdrop-blur-xl border-b border-white/10 p-6"
+        className="bg-black/40 backdrop-blur-xl border-b border-white/10 p-4 md:p-6"
       >
         <div className="max-w-[1800px] mx-auto">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-4">
-              <svg className="w-16 h-16" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <div className="flex items-center justify-between mb-4 md:mb-6 gap-3">
+            <div className="flex items-center gap-3">
+              <svg className="w-10 h-10 md:w-16 md:h-16" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="50" cy="50" r="47" fill="url(#glowGradAdmin)" opacity="0.6"/>
                 <g>
                   <animateTransform
@@ -393,7 +482,7 @@ export default function AdminPanel() {
               </svg>
               <div>
                 <div className="flex items-center gap-2">
-                  <h1 className="text-2xl font-bold" style={{
+                  <h1 className="text-lg md:text-2xl font-bold" style={{
                     background: 'linear-gradient(135deg, #A855F7, #EC4899, #FB923C)',
                     WebkitBackgroundClip: 'text',
                     WebkitTextFillColor: 'transparent',
@@ -408,19 +497,14 @@ export default function AdminPanel() {
             <button
               onClick={handleSyncFromR2}
               disabled={syncing}
-              className="flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-purple-500 via-pink-500 to-rose-500 text-white rounded-xl font-bold text-lg hover:shadow-2xl hover:shadow-purple-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105"
+              className="flex items-center gap-2 px-4 py-2 md:px-8 md:py-4 bg-gradient-to-r from-purple-500 via-pink-500 to-rose-500 text-white rounded-xl font-bold text-sm md:text-lg hover:shadow-2xl hover:shadow-purple-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {syncing ? (
-                <>
-                  <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>Syncing from Cloudflare R2...</span>
-                </>
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
               ) : (
-                <>
-                  <Download className="w-6 h-6" />
-                  <span>Sync from Cloudflare R2</span>
-                </>
+                <Download className="w-5 h-5" />
               )}
+              <span className="hidden sm:inline">{syncing ? 'Syncing...' : 'Sync from R2'}</span>
             </button>
           </div>
 
@@ -430,6 +514,7 @@ export default function AdminPanel() {
               { id: 'overview', label: 'Overview', icon: BarChart3 },
               { id: 'songs', label: 'Songs', icon: Music },
               { id: 'users', label: 'Users', icon: Users },
+              { id: 'discover', label: 'Discover', icon: Radio },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -449,7 +534,7 @@ export default function AdminPanel() {
       </motion.div>
 
       {/* Main Content */}
-      <div className="max-w-[1800px] mx-auto p-6">
+      <div className="max-w-[1800px] mx-auto p-3 md:p-6">
         {/* OVERVIEW TAB */}
         {activeTab === 'overview' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
@@ -530,12 +615,34 @@ export default function AdminPanel() {
         {activeTab === 'songs' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <div className="bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 overflow-hidden">
-              <div className="p-6 border-b border-white/10">
-                <h2 className="text-xl font-bold text-white">All Songs - Complete Details</h2>
+              <div className="p-4 md:p-6 border-b border-white/10">
+                <h2 className="text-lg md:text-xl font-bold text-white">All Songs</h2>
                 <p className="text-gray-400 text-sm">{songs.length} songs in library</p>
               </div>
 
-              <div className="overflow-x-auto">
+              {/* Mobile cards */}
+              <div className="block md:hidden divide-y divide-white/10">
+                {songs.map((song) => (
+                  <div key={song.id} className="flex items-center gap-3 p-4">
+                    <img src={song.cover_url} alt={song.title} className="w-12 h-12 rounded-lg object-cover flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white font-semibold text-sm truncate">{song.title}</p>
+                      <p className="text-gray-400 text-xs truncate">{song.artist}</p>
+                      <p className="text-purple-400 text-xs font-bold">{song.play_count} plays</p>
+                    </div>
+                    <button
+                      onClick={() => { setSelectedSong(song); fetchSongPlayStats(song.id); }}
+                      className="p-2 bg-blue-500/20 text-blue-400 rounded-lg flex-shrink-0"
+                    >
+                      <Eye className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+                {songs.length === 0 && <p className="text-gray-400 text-center py-8 text-sm">No songs yet</p>}
+              </div>
+
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-white/5">
                     <tr>
@@ -566,7 +673,6 @@ export default function AdminPanel() {
                         </td>
                         <td className="px-6 py-4">
                           <p className="text-purple-400 font-bold">{song.play_count} plays</p>
-                          <p className="text-gray-400 text-xs">Last: {'N/A'}</p>
                         </td>
                         <td className="px-6 py-4">
                           <p className="text-gray-400 text-xs">{new Date(song.created_at).toLocaleDateString()}</p>
@@ -574,7 +680,7 @@ export default function AdminPanel() {
                         </td>
                         <td className="px-6 py-4">
                           <button
-                            onClick={() => setSelectedSong(song)}
+                            onClick={() => { setSelectedSong(song); fetchSongPlayStats(song.id); }}
                             className="p-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg transition-all"
                           >
                             <Eye className="w-4 h-4" />
@@ -593,12 +699,68 @@ export default function AdminPanel() {
         {activeTab === 'users' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <div className="bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 overflow-hidden">
-              <div className="p-6 border-b border-white/10">
-                <h2 className="text-xl font-bold text-white">All Users - Complete Details</h2>
+              <div className="p-4 md:p-6 border-b border-white/10">
+                <h2 className="text-lg md:text-xl font-bold text-white">All Users</h2>
                 <p className="text-gray-400 text-sm">{users.length} registered users</p>
               </div>
 
-              <div className="overflow-x-auto">
+              {/* Mobile cards */}
+              <div className="block md:hidden divide-y divide-white/10">
+                {users.map((user) => {
+                  const diff = user.last_seen ? Date.now() - new Date(user.last_seen).getTime() : null;
+                  const isOnline = diff !== null && diff < 90000;
+                  const secs = diff ? Math.floor(diff / 1000) : 0;
+                  const mins = diff ? Math.floor(diff / 60000) : 0;
+                  const hours = diff ? Math.floor(diff / 3600000) : 0;
+                  const days = diff ? Math.floor(diff / 86400000) : 0;
+                  const weeks = Math.floor(days / 7);
+                  const months = Math.floor(days / 30);
+                  const years = Math.floor(days / 365);
+                  const onlineLabel = diff === null ? 'Never'
+                    : isOnline ? 'Online'
+                    : years  >= 1 ? `${years}y ago`
+                    : months >= 1 ? `${months}mo ago`
+                    : weeks  >= 1 ? `${weeks}w ago`
+                    : days   >= 1 ? `${days}d ago`
+                    : hours  >= 1 ? `${hours}h ago`
+                    : mins   >= 1 ? `${mins}m ago`
+                    : `${secs}s ago`;
+                  return (
+                    <div key={user.id} className="p-4 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-white font-bold">{user.username || 'No username'}</p>
+                          <p className="text-yellow-400 font-mono text-sm">{user.password}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2.5 h-2.5 rounded-full ${isOnline ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`} />
+                          <span className={`text-xs ${isOnline ? 'text-green-400' : 'text-gray-500'}`}>{onlineLabel}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="text-purple-400 font-mono text-sm font-bold">#{user.unique_code || '----'}</span>
+                          <p className="text-gray-500 text-xs">Joined {new Date(user.created_at).toLocaleDateString()}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          {user.is_blocked ? (
+                            <button onClick={() => handleUnblockUser(user.id)} className="px-3 py-1 bg-green-500/20 text-green-400 rounded-lg text-xs">Unblock</button>
+                          ) : (
+                            <button onClick={() => handleBlockUser(user.id)} className="px-3 py-1 bg-orange-500/20 text-orange-400 rounded-lg text-xs">Block</button>
+                          )}
+                          <button onClick={() => handleDeleteUser(user.id)} className="p-1.5 bg-red-500/20 text-red-400 rounded-lg">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {users.length === 0 && <p className="text-gray-400 text-center py-8 text-sm">No users yet</p>}
+              </div>
+
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-white/5">
                     <tr>
@@ -606,7 +768,6 @@ export default function AdminPanel() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Password</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Online</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Unique ID</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Status</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Joined</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Actions</th>
                     </tr>
@@ -624,42 +785,40 @@ export default function AdminPanel() {
                           <p className="text-yellow-400 font-mono text-lg font-bold">{user.password}</p>
                         </td>
                         <td className="px-6 py-4">
-                          {/* Online status dot */}
                           {(() => {
-                            const isOnline = user.last_seen && (Date.now() - new Date(user.last_seen).getTime()) < 90000;
-                            return isOnline ? (
-                              <div className="flex items-center gap-2">
-                                <span className="w-3 h-3 bg-green-500 rounded-full animate-pulse shadow-lg shadow-green-500/50" />
-                                <span className="text-green-400 text-xs font-medium">Online</span>
-                              </div>
-                            ) : (
+                            if (!user.last_seen) return (
                               <div className="flex items-center gap-2">
                                 <span className="w-3 h-3 bg-gray-600 rounded-full" />
-                                <span className="text-gray-500 text-xs">
-                                  {user.last_seen ? `${Math.round((Date.now() - new Date(user.last_seen).getTime()) / 60000)}m ago` : 'Never'}
-                                </span>
+                                <span className="text-gray-500 text-xs">Never</span>
+                              </div>
+                            );
+                            const diff = Date.now() - new Date(user.last_seen).getTime();
+                            const isOnline = diff < 90000;
+                            const secs  = Math.floor(diff / 1000);
+                            const mins  = Math.floor(diff / 60000);
+                            const hours = Math.floor(diff / 3600000);
+                            const days  = Math.floor(diff / 86400000);
+                            const weeks = Math.floor(days / 7);
+                            const months= Math.floor(days / 30);
+                            const years = Math.floor(days / 365);
+                            const label = isOnline ? 'Online'
+                              : years  >= 1 ? `${years}y ago`
+                              : months >= 1 ? `${months}mo ago`
+                              : weeks  >= 1 ? `${weeks}w ago`
+                              : days   >= 1 ? `${days}d ago`
+                              : hours  >= 1 ? `${hours}h ago`
+                              : mins   >= 1 ? `${mins}m ago`
+                              : `${secs}s ago`;
+                            return (
+                              <div className="flex items-center gap-2">
+                                <span className={`w-3 h-3 rounded-full ${isOnline ? 'bg-green-500 animate-pulse shadow-lg shadow-green-500/50' : 'bg-gray-600'}`} />
+                                <span className={`text-xs font-medium ${isOnline ? 'text-green-400' : 'text-gray-500'}`}>{label}</span>
                               </div>
                             );
                           })()}
                         </td>
                         <td className="px-6 py-4">
                           <span className="text-purple-400 font-mono font-bold tracking-widest text-lg">#{user.unique_code || '----'}</span>
-                        </td>
-                        <td className="px-6 py-4">
-                          {user.is_blocked ? (
-                            <div>
-                              <span className="inline-block px-2 py-1 bg-red-500/20 text-red-400 text-xs rounded">
-                                Blocked
-                              </span>
-                              {user.blocked_reason && (
-                                <p className="text-gray-500 text-xs mt-1">{user.blocked_reason}</p>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="inline-block px-2 py-1 bg-green-500/20 text-green-400 text-xs rounded">
-                              Active
-                            </span>
-                          )}
                         </td>
                         <td className="px-6 py-4">
                           <p className="text-gray-400 text-sm">{new Date(user.created_at).toLocaleDateString()}</p>
@@ -701,6 +860,190 @@ export default function AdminPanel() {
           </motion.div>
         )}
 
+        {/* DISCOVER TAB */}
+        {activeTab === 'discover' && (() => {
+          const filtered = pendingSongs.filter(s =>
+            discoverFilter === 'all' ? true : s.source?.toLowerCase() === discoverFilter
+          );
+          const allFilteredSelected = filtered.length > 0 && filtered.every(s => selectedPending.includes(s.id));
+
+          const statusBadge = (status: string) => {
+            const map: Record<string, { bg: string; text: string }> = {
+              pending:     { bg: 'bg-yellow-500/20', text: 'text-yellow-400' },
+              downloading: { bg: 'bg-blue-500/20',   text: 'text-blue-400'   },
+              done:        { bg: 'bg-green-500/20',  text: 'text-green-400'  },
+              failed:      { bg: 'bg-red-500/20',    text: 'text-red-400'    },
+            };
+            const s = map[status] || map['pending'];
+            return (
+              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${s.bg} ${s.text}`}>
+                {status}
+              </span>
+            );
+          };
+
+          return (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+              {/* Top bar */}
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-xl font-bold text-white">Discover Queue</h2>
+                  <span className="px-2 py-0.5 bg-white/10 text-gray-400 text-xs rounded">{pendingSongs.length} pending</span>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {/* Explore toggle */}
+                  <button
+                    onClick={handleToggleExplore}
+                    disabled={togglingExplore}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all disabled:opacity-50"
+                  >
+                    {exploreEnabled
+                      ? <ToggleRight className="w-5 h-5 text-green-400" />
+                      : <ToggleLeft className="w-5 h-5 text-gray-500" />}
+                    <span className={`text-sm font-medium ${exploreEnabled ? 'text-green-400' : 'text-gray-400'}`}>
+                      Explore {exploreEnabled ? 'ON' : 'OFF'}
+                    </span>
+                  </button>
+
+                  {/* Refresh */}
+                  <button
+                    onClick={fetchPendingSongs}
+                    disabled={loadingDiscover}
+                    className="p-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all text-gray-400 hover:text-white disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${loadingDiscover ? 'animate-spin' : ''}`} />
+                  </button>
+
+                  {/* Download selected */}
+                  <button
+                    onClick={handleDownloadSelected}
+                    disabled={downloading || selectedPending.length === 0}
+                    className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-semibold text-sm hover:shadow-lg hover:shadow-purple-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {downloading ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Zap className="w-4 h-4" />
+                    )}
+                    Download {selectedPending.length > 0 ? `(${selectedPending.length})` : 'Selected'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Source filter tabs */}
+              <div className="flex gap-2">
+                {(['all', 'spotify', 'shazam', 'trending'] as const).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => { setDiscoverFilter(f); setSelectedPending([]); }}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium capitalize transition-all ${
+                      discoverFilter === f
+                        ? 'bg-white/15 text-white'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+
+              {/* Song list */}
+              <div className="bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 overflow-hidden">
+                {loadingDiscover ? (
+                  <div className="flex items-center justify-center py-16 text-gray-500">
+                    <RefreshCw className="w-5 h-5 animate-spin mr-2" /> Loading...
+                  </div>
+                ) : filtered.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-500">
+                    <Radio className="w-10 h-10 opacity-30" />
+                    <p className="text-sm">No songs in queue{discoverFilter !== 'all' ? ` from ${discoverFilter}` : ''}.</p>
+                    <p className="text-xs opacity-60">Songs added via Make.com automation will appear here.</p>
+                  </div>
+                ) : (
+                  <table className="w-full">
+                    <thead className="bg-white/5">
+                      <tr>
+                        <th className="px-4 py-3 text-left">
+                          <input
+                            type="checkbox"
+                            checked={allFilteredSelected}
+                            onChange={() => {
+                              if (allFilteredSelected) {
+                                setSelectedPending(prev => prev.filter(id => !filtered.map(s => s.id).includes(id)));
+                              } else {
+                                setSelectedPending(prev => [...new Set([...prev, ...filtered.map(s => s.id)])]);
+                              }
+                            }}
+                            className="w-4 h-4 accent-purple-500 cursor-pointer"
+                          />
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Song</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Source</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Status</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Added</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/10">
+                      {filtered.map(song => (
+                        <tr
+                          key={song.id}
+                          onClick={() => setSelectedPending(prev =>
+                            prev.includes(song.id) ? prev.filter(id => id !== song.id) : [...prev, song.id]
+                          )}
+                          className={`cursor-pointer transition-colors hover:bg-white/5 ${
+                            selectedPending.includes(song.id) ? 'bg-purple-500/10' : ''
+                          }`}
+                        >
+                          <td className="px-4 py-3">
+                            <input
+                              type="checkbox"
+                              checked={selectedPending.includes(song.id)}
+                              onChange={() => {}}
+                              className="w-4 h-4 accent-purple-500 pointer-events-none"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              {song.cover_url ? (
+                                <img src={song.cover_url} alt="" className="w-10 h-10 rounded-lg object-cover" />
+                              ) : (
+                                <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center">
+                                  <Music className="w-4 h-4 text-gray-500" />
+                                </div>
+                              )}
+                              <div>
+                                <p className="text-white font-medium text-sm">{song.title || 'Unknown'}</p>
+                                <p className="text-gray-400 text-xs">{song.artist || '—'}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium capitalize ${
+                              song.source === 'spotify'  ? 'bg-green-500/15 text-green-400' :
+                              song.source === 'shazam'   ? 'bg-blue-500/15 text-blue-400'   :
+                              song.source === 'trending' ? 'bg-orange-500/15 text-orange-400':
+                              'bg-white/10 text-gray-400'
+                            }`}>
+                              {song.source || 'unknown'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">{statusBadge(song.status || 'pending')}</td>
+                          <td className="px-4 py-3">
+                            <p className="text-gray-400 text-xs">
+                              {song.created_at ? new Date(song.created_at).toLocaleDateString() : '—'}
+                            </p>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </motion.div>
+          );
+        })()}
+
       </div>
 
       {/* Song Detail Modal */}
@@ -718,16 +1061,16 @@ export default function AdminPanel() {
               animate={{ scale: 1 }}
               exit={{ scale: 0.9 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-gradient-to-br from-gray-900 to-purple-900 rounded-2xl p-8 max-w-2xl w-full border border-white/20"
+              className="bg-gradient-to-br from-gray-900 to-purple-900 rounded-2xl p-4 md:p-8 max-w-2xl w-full border border-white/20 max-h-[90vh] overflow-y-auto"
             >
-              <div className="flex justify-between items-start mb-6">
-                <h2 className="text-2xl font-bold text-white">Complete Song Details</h2>
+              <div className="flex justify-between items-start mb-4 md:mb-6">
+                <h2 className="text-lg md:text-2xl font-bold text-white">Song Details</h2>
                 <button onClick={() => setSelectedSong(null)} className="text-gray-400 hover:text-white">
                   <X className="w-6 h-6" />
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
                 <div>
                   <img src={selectedSong.cover_url} alt={selectedSong.title} className="w-full rounded-xl mb-4" />
                   <h3 className="text-xl font-bold text-white">{selectedSong.title}</h3>
@@ -749,22 +1092,57 @@ export default function AdminPanel() {
                     <p className="text-white font-semibold">{selectedSong.duration}</p>
                   </div>
                   <div>
-                    <p className="text-gray-400 text-sm">Play Count</p>
+                    <p className="text-gray-400 text-sm">Total Plays</p>
                     <p className="text-purple-400 font-bold">{selectedSong.play_count} plays</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-400 text-sm">Last Played</p>
-                    <p className="text-white">{'N/A'}</p>
                   </div>
                   <div>
                     <p className="text-gray-400 text-sm">Uploaded</p>
                     <p className="text-white">{new Date(selectedSong.created_at).toLocaleDateString()}</p>
                   </div>
+
                   <div>
                     <p className="text-gray-400 text-sm">File URL</p>
                     <p className="text-blue-400 text-xs truncate">{selectedSong.file_url}</p>
                   </div>
                 </div>
+              </div>
+
+              {/* Per-user play breakdown */}
+              <div className="mt-6 border-t border-white/10 pt-5">
+                <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
+                  <PlayCircle className="w-4 h-4 text-purple-400" />
+                  Plays by User
+                </h3>
+                {loadingPlayStats ? (
+                  <p className="text-gray-500 text-sm">Loading...</p>
+                ) : songPlayStats.length === 0 ? (
+                  <p className="text-gray-500 text-sm">No play history yet.</p>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {songPlayStats.map((stat, i) => (
+                      <div key={i} className="flex items-center justify-between bg-white/5 rounded-lg px-4 py-2">
+                        <div className="flex items-center gap-3">
+                          <span className="text-gray-500 text-xs w-5 text-right">{i + 1}.</span>
+                          <span className="text-white font-medium">{stat.username}</span>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <span className="text-gray-400 text-xs">
+                            Last: {(() => {
+                              const diff = Date.now() - new Date(stat.last_played).getTime();
+                              const mins = Math.floor(diff / 60000);
+                              const hours = Math.floor(diff / 3600000);
+                              const days = Math.floor(diff / 86400000);
+                              return days >= 1 ? `${days}d ago` : hours >= 1 ? `${hours}h ago` : mins >= 1 ? `${mins}m ago` : 'Just now';
+                            })()}
+                          </span>
+                          <span className="text-purple-400 font-bold text-sm min-w-[4rem] text-right">
+                            {stat.count} {stat.count === 1 ? 'play' : 'plays'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </motion.div>
           </motion.div>

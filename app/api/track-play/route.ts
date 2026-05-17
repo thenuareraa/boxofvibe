@@ -3,59 +3,64 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
 export async function POST(request: NextRequest) {
   try {
-    const { song_id, play_duration = 0, completed = false } = await request.json();
+    const { song_id, play_duration = 0, total_duration = 0, completed = false } = await request.json();
 
-    const authHeader = request.headers.get('authorization');
-    if (!authHeader) {
+    // Only count if user listened to at least 50% of the song
+    const halfPlayed = total_duration > 0 && play_duration >= total_duration * 0.5;
+    if (!completed && !halfPlayed) {
+      return NextResponse.json({ success: true, counted: false });
+    }
+
+    // Validate using custom session token
+    const sessionToken = request.headers.get('Authorization')?.replace('Bearer ', '');
+    if (!sessionToken) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { data: { user } } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
-    if (!user) {
+    const { data: session } = await supabase
+      .from('custom_sessions')
+      .select('user_id, expires_at')
+      .eq('session_token', sessionToken)
+      .single();
+
+    if (!session || new Date(session.expires_at) < new Date()) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Insert play history
-    const { error: playError } = await supabase
-      .from('play_history')
-      .insert([
-        {
-          user_id: user.id,
-          song_id,
-          play_duration,
-          completed
-        }
-      ]);
-
-    if (playError) {
-      console.error('Error tracking play:', playError);
-      return NextResponse.json({ error: playError.message }, { status: 500 });
-    }
-
-    // Increment song play count
+    // Increment play_count on the songs table
     const { error: countError } = await supabase.rpc('increment_play_count', {
-      song_id_param: song_id
+      song_id_param: song_id,
     });
 
     if (countError) {
-      console.error('Error incrementing play count:', countError);
+      // Fallback: manual increment if RPC doesn't exist
+      const { data: song } = await supabase
+        .from('songs')
+        .select('play_count')
+        .eq('id', song_id)
+        .single();
+
+      await supabase
+        .from('songs')
+        .update({ play_count: (song?.play_count || 0) + 1 })
+        .eq('id', song_id);
     }
 
-    // Log activity
-    await supabase
-      .from('user_activity')
-      .insert([
-        {
-          user_id: user.id,
-          activity_type: 'play_song',
-          activity_data: { song_id, completed }
-        }
-      ]);
+    // Record play history if table exists (silently ignore if it doesn't)
+    try {
+      await supabase.from('play_history').insert([{
+        user_id: String(session.user_id),
+        song_id,
+        play_duration,
+        completed,
+        played_at: new Date().toISOString(),
+      }]);
+    } catch { /* table may not exist */ }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

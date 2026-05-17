@@ -33,6 +33,7 @@ import {
   Check,
   Copy,
   UserMinus,
+  Moon,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase, type Song } from '@/lib/supabase';
@@ -80,6 +81,11 @@ export default function Dashboard() {
   const [addToLoopSelection, setAddToLoopSelection] = useState<Set<number>>(new Set());
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  // Sleep Timer state
+  const [showSleepTimer, setShowSleepTimer] = useState(false);
+  const [sleepRemaining, setSleepRemaining] = useState<number | null>(null);
+  const [sleepEndOfSong, setSleepEndOfSong] = useState(false);
+  const preSleepVolumeRef = useRef<number>(70);
   // Vibe Loop state
   const [showVibeLoop, setShowVibeLoop] = useState(false);
   const [vibeLoopStart, setVibeLoopStart] = useState(0);
@@ -118,6 +124,7 @@ export default function Dashboard() {
   const timeCurrentRef = useRef<HTMLSpanElement>(null);
   const mobileTimeRef = useRef<HTMLSpanElement>(null);
   const volumeBarRef = useRef<HTMLDivElement>(null);
+  const volumeTrackRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number | null>(null);
   const customLoopActiveRef = useRef(isCustomLoopActive);
@@ -142,21 +149,23 @@ export default function Dashboard() {
   // Check authentication and fetch user
   useEffect(() => {
     const checkAuth = async () => {
-      // Check custom auth session — send localStorage token as header for Capacitor WebView
-      const storedToken = localStorage.getItem('bov_session_token');
-      const response = await fetch('/api/custom-auth/me', {
-        headers: storedToken ? { 'Authorization': `Bearer ${storedToken}` } : {},
-      });
-      const result = await response.json();
+      try {
+        const storedToken = localStorage.getItem('bov_session_token');
+        const response = await fetch('/api/custom-auth/me', {
+          headers: storedToken ? { 'Authorization': `Bearer ${storedToken}` } : {},
+        });
+        const result = await response.json();
 
-      if (!result.success || !result.user) {
+        if (!result.success || !result.user) {
+          router.push('/');
+          return;
+        }
+
+        setUser(result.user);
+      } catch {
+        // Network error (cold start) — redirect to login so user can retry
         router.push('/');
-        return;
       }
-
-      const user = result.user;
-
-      setUser(user);
     };
 
     checkAuth();
@@ -167,7 +176,32 @@ export default function Dashboard() {
     const fetchData = async () => {
       setLoading(true);
 
-      // Fetch songs
+      // INSTANT STARTUP: load cached songs first so audio starts buffering immediately
+      const lastSongId = localStorage.getItem('bov_last_song_id');
+      try {
+        const cached = localStorage.getItem('bov_songs_cache');
+        if (cached) {
+          const cachedSongs: Song[] = JSON.parse(cached);
+          if (cachedSongs.length > 0) {
+            setSongs(cachedSongs);
+            const savedSong = lastSongId ? cachedSongs.find((s) => s.id === parseInt(lastSongId)) : null;
+            const firstSong = savedSong || cachedSongs[0];
+            setCurrentSong(firstSong);
+            setCurrentQueue(cachedSongs);
+            setQueueIndex(cachedSongs.findIndex((s) => s.id === firstSong.id));
+            // Pre-warm audio immediately from cache (before Supabase responds)
+            if (audioRef.current) {
+              audioRef.current.src = firstSong.file_url;
+              audioRef.current.load();
+            }
+            addDebugLog(`Instant load from cache: ${firstSong.title}`);
+          }
+        }
+      } catch {
+        // Cache parse error — continue to fresh fetch
+      }
+
+      // Fetch fresh songs from Supabase (updates cache for next visit)
       const { data: songsData, error: songsError } = await supabase
         .from('songs')
         .select('*')
@@ -177,16 +211,14 @@ export default function Dashboard() {
         console.error('Error fetching songs:', songsError);
       } else {
         setSongs(songsData || []);
+        // Save to cache for instant load next time
+        try { localStorage.setItem('bov_songs_cache', JSON.stringify(songsData || [])); } catch {}
         if (songsData && songsData.length > 0) {
-          // SESSION PERSISTENCE: restore last played song
-          const lastSongId = localStorage.getItem('bov_last_song_id');
-          const lastPosition = parseFloat(localStorage.getItem('bov_last_position') || '0');
           const savedSong = lastSongId ? songsData.find((s: Song) => s.id === parseInt(lastSongId)) : null;
           if (savedSong) {
             setCurrentSong(savedSong);
             setCurrentQueue(songsData);
             setQueueIndex(songsData.findIndex((s: Song) => s.id === savedSong.id));
-            // Start from beginning, don't restore position
             addDebugLog(`Restored last song: ${savedSong.title}`);
           } else {
             setCurrentSong(songsData[0]);
@@ -329,12 +361,21 @@ export default function Dashboard() {
 
     const audio = audioRef.current;
 
-    // Set source and start loading
-    audio.src = currentSong.file_url;
-    audio.load();
+    // Always stop previous playback to prevent audio bleed
+    audio.pause();
     audio.currentTime = 0;
 
-    addDebugLog(`Loaded new song: ${currentSong.title} - ${currentSong.file_url}`);
+    // If the preload swap already loaded this song's data, skip reloading — play immediately
+    if (audio.src === currentSong.file_url && audio.readyState >= 2) {
+      addDebugLog(`Preloaded — instant play: ${currentSong.title}`);
+      if (isPlaying) audio.play().catch(() => {});
+      return;
+    }
+
+    audio.src = currentSong.file_url;
+    // Play as soon as first bytes arrive — don't wait for full buffer
+    audio.play().catch(() => {});
+    addDebugLog(`Loading song: ${currentSong.title}`);
   }, [currentSong]);
 
   // AGGRESSIVE PRELOADING: Preload next 3 songs for instant playback
@@ -453,6 +494,20 @@ export default function Dashboard() {
       // Track completed play
       if (currentSong) {
         trackPlay(currentSong.id, true, audio.currentTime);
+      }
+
+      // Sleep timer — end of song mode: stop here
+      if (sleepEndOfSong) {
+        setSleepEndOfSong(false);
+        setIsPlaying(false);
+        const restore = preSleepVolumeRef.current;
+        setTimeout(() => {
+          if (audioRef.current) audioRef.current.volume = restore / 100;
+          if (volumeTrackRef.current) volumeTrackRef.current.style.width = `${restore}%`;
+          setVolume(restore);
+        }, 150);
+        showNotification('info', 'Sleep timer ended — goodnight 🌙');
+        return;
       }
 
       // If vibe loop is active, loop back to start
@@ -589,20 +644,18 @@ export default function Dashboard() {
   // Track play for analytics
   const trackPlay = async (songId: number, completed: boolean = false, duration: number = 0) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
+      const storedToken = localStorage.getItem('bov_session_token');
+      if (!storedToken) return;
+
+      const totalDuration = audioRef.current?.duration || 0;
 
       await fetch('/api/track-play', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
+          'Authorization': `Bearer ${storedToken}`,
         },
-        body: JSON.stringify({
-          song_id: songId,
-          play_duration: duration,
-          completed
-        })
+        body: JSON.stringify({ song_id: songId, play_duration: duration, total_duration: totalDuration, completed }),
       });
     } catch (error) {
       console.error('Error tracking play:', error);
@@ -752,6 +805,110 @@ export default function Dashboard() {
     // Track play start for previous song
     trackPlay(prevSong.id, false, 0);
     setIsPlaying(true);
+  };
+
+  // NOTIFICATION PLAYER: Android lock-screen / notification media controls
+  useEffect(() => {
+    if (!currentSong || typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentSong.title,
+      artist: currentSong.artist || 'BoxOfVibe',
+      album: currentSong.album || 'BoxOfVibe',
+      artwork: currentSong.cover_url
+        ? [
+            { src: currentSong.cover_url, sizes: '256x256', type: 'image/jpeg' },
+            { src: currentSong.cover_url, sizes: '512x512', type: 'image/jpeg' },
+          ]
+        : [{ src: '/icons/icon-256.png', sizes: '256x256', type: 'image/png' }],
+    });
+
+    navigator.mediaSession.setActionHandler('play', () => setIsPlaying(true));
+    navigator.mediaSession.setActionHandler('pause', () => setIsPlaying(false));
+    navigator.mediaSession.setActionHandler('nexttrack', skipNext);
+    navigator.mediaSession.setActionHandler('previoustrack', skipPrevious);
+    navigator.mediaSession.setActionHandler('seekto', (details) => {
+      if (audioRef.current && details.seekTime !== undefined) {
+        audioRef.current.currentTime = details.seekTime;
+      }
+    });
+  }, [currentSong]);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+  }, [isPlaying]);
+
+  // SLEEP TIMER: countdown tick
+  useEffect(() => {
+    if (sleepRemaining === null) return;
+
+    if (sleepRemaining <= 0) {
+      // Pause audio directly first — before any state/volume restore
+      // so there's no frame where volume jumps back while audio still plays
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.volume = 0;
+      }
+      setIsPlaying(false);
+      setSleepRemaining(null);
+      // Restore volume silently after audio is already stopped
+      const restore = preSleepVolumeRef.current;
+      setTimeout(() => {
+        if (audioRef.current) audioRef.current.volume = restore / 100;
+        if (volumeTrackRef.current) volumeTrackRef.current.style.width = `${restore}%`;
+        setVolume(restore);
+      }, 150);
+      showNotification('info', 'Sleep timer ended — goodnight 🌙');
+      return;
+    }
+
+    // Fade volume out over last 10 seconds
+    if (sleepRemaining <= 10) {
+      const fadeVol = Math.round((sleepRemaining / 10) * preSleepVolumeRef.current);
+      if (audioRef.current) audioRef.current.volume = fadeVol / 100;
+      if (volumeTrackRef.current) volumeTrackRef.current.style.width = `${fadeVol}%`;
+    }
+
+    const tick = setTimeout(() => setSleepRemaining(r => r !== null ? r - 1 : null), 1000);
+    return () => clearTimeout(tick);
+  }, [sleepRemaining]);
+
+  // SLEEP TIMER: end-of-song mode — stop after current song finishes
+  useEffect(() => {
+    if (!sleepEndOfSong) return;
+    if (!isPlaying && sleepEndOfSong) {
+      setSleepEndOfSong(false);
+      showNotification('info', 'Sleep timer ended — goodnight 🌙');
+    }
+  }, [isPlaying, sleepEndOfSong]);
+
+  const startSleepTimer = (seconds: number | 'end') => {
+    preSleepVolumeRef.current = volume;
+    if (seconds === 'end') {
+      setSleepEndOfSong(true);
+      setSleepRemaining(null);
+    } else {
+      setSleepEndOfSong(false);
+      setSleepRemaining(seconds);
+    }
+    setShowSleepTimer(false);
+  };
+
+  const cancelSleepTimer = () => {
+    setSleepRemaining(null);
+    setSleepEndOfSong(false);
+    const restore = preSleepVolumeRef.current;
+    setVolume(restore);
+    if (audioRef.current) audioRef.current.volume = restore / 100;
+    if (volumeTrackRef.current) volumeTrackRef.current.style.width = `${restore}%`;
+  };
+
+  const sleepTimerLabel = () => {
+    if (sleepEndOfSong) return 'End';
+    if (sleepRemaining === null) return null;
+    if (sleepRemaining >= 60) return `${Math.ceil(sleepRemaining / 60)}m`;
+    return `${sleepRemaining}s`;
   };
 
   const toggleLike = async (songId: number) => {
@@ -1031,6 +1188,9 @@ export default function Dashboard() {
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = Number(e.target.value);
+    // Direct DOM update — no React re-render during drag
+    if (volumeTrackRef.current) volumeTrackRef.current.style.width = `${val}%`;
+    if (audioRef.current) audioRef.current.volume = val / 100;
     setVolume(val);
     setIsMuted(false);
   };
@@ -1059,7 +1219,7 @@ export default function Dashboard() {
       {/* Hidden Audio Elements */}
       <audio
         ref={audioRef}
-        preload="metadata"
+        preload="auto"
         crossOrigin="anonymous"
         playsInline
         autoPlay={false}
@@ -1457,6 +1617,7 @@ export default function Dashboard() {
                       <div
                         key={song.id}
                         onClick={() => handleSongClick(song)}
+                        onMouseEnter={() => handleSongHover(song)}
                         className={`group relative rounded-lg px-4 py-3 border transition-colors cursor-pointer ${
                           currentSong?.id === song.id
                             ? 'border-purple-500/50 bg-white/10'
@@ -2104,6 +2265,7 @@ export default function Dashboard() {
                   <div
                     key={song.id}
                     onClick={() => handleSongClick(song)}
+                    onMouseEnter={() => handleSongHover(song)}
                     className={`group relative rounded-lg px-4 py-3 border transition-all duration-300 ease-out cursor-pointer ${
                       currentSong?.id === song.id
                         ? 'border-purple-500/50 bg-white/10'
@@ -2196,7 +2358,7 @@ export default function Dashboard() {
                 {/* Filled Progress */}
                 <div
                   ref={progressTrackRef}
-                  className="absolute left-0 top-0 h-full rounded-full pointer-events-none transition-[width] duration-100 linear"
+                  className="absolute left-0 top-0 h-full rounded-full pointer-events-none"
                   style={{ width: `0%` }}
                 >
                   {/* Base gradient */}
@@ -2278,8 +2440,44 @@ export default function Dashboard() {
 
               {/* Row 2: Playback controls — play button always dead-center */}
               <div className="flex items-center">
-                {/* Left side: Shuffle + Prev */}
+                {/* Left side: Sleep + Shuffle + Prev */}
                 <div className="flex items-center gap-4 flex-1 justify-end pr-5">
+                  {/* Sleep Timer button */}
+                  <div className="relative">
+                    <button
+                      onClick={() => sleepRemaining !== null || sleepEndOfSong ? cancelSleepTimer() : setShowSleepTimer(s => !s)}
+                      className={`relative transition-colors ${sleepRemaining !== null || sleepEndOfSong ? 'text-purple-400' : 'text-gray-500'}`}
+                    >
+                      <Moon className="w-4 h-4" />
+                      <span className="absolute top-full left-1/2 -translate-x-1/2 mt-0.5 text-[9px] leading-none font-mono whitespace-nowrap">
+                        {sleepTimerLabel() ?? ''}
+                      </span>
+                    </button>
+                    <AnimatePresence>
+                      {showSleepTimer && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 8 }}
+                          className="absolute bottom-10 left-1/2 -translate-x-1/2 bg-gray-900 border border-purple-500/30 rounded-2xl p-3 z-50 w-44 shadow-2xl"
+                        >
+                          <p className="text-white text-xs font-semibold mb-2 text-center">Sleep Timer</p>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {[{l:'5m',v:300},{l:'15m',v:900},{l:'30m',v:1800},{l:'45m',v:2700},{l:'60m',v:3600}].map(o => (
+                              <button key={o.l} onClick={() => startSleepTimer(o.v)}
+                                className="bg-white/10 hover:bg-purple-500/30 text-white text-xs rounded-lg py-1.5 transition-colors font-mono">
+                                {o.l}
+                              </button>
+                            ))}
+                          </div>
+                          <button onClick={() => startSleepTimer('end')}
+                            className="w-full mt-1.5 bg-white/10 hover:bg-purple-500/30 text-white text-xs rounded-lg py-1.5 transition-colors">
+                            End of song
+                          </button>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
                   <button onClick={toggleShuffle} className={`transition-colors ${isShuffle ? 'text-purple-400' : 'text-gray-500'}`}>
                     <Shuffle className="w-4 h-4" />
                   </button>
@@ -2387,6 +2585,40 @@ export default function Dashboard() {
               {/* Player Controls */}
               <div className="flex flex-col items-center gap-2 flex-1 max-w-md">
                 <div className="flex items-center gap-4">
+                  {/* Sleep Timer — desktop */}
+                  <div className="relative">
+                    <button
+                      onClick={() => sleepRemaining !== null || sleepEndOfSong ? cancelSleepTimer() : setShowSleepTimer(s => !s)}
+                      className={`flex flex-col items-center transition-colors ${sleepRemaining !== null || sleepEndOfSong ? 'text-purple-400' : 'text-gray-400 hover:text-white'}`}
+                    >
+                      <Moon className="w-4 h-4" />
+                      {sleepTimerLabel() && <span className="text-[9px] leading-none mt-0.5 font-mono">{sleepTimerLabel()}</span>}
+                    </button>
+                    <AnimatePresence>
+                      {showSleepTimer && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 8 }}
+                          className="absolute bottom-12 left-1/2 -translate-x-1/2 bg-gray-900 border border-purple-500/30 rounded-2xl p-3 z-50 w-48 shadow-2xl"
+                        >
+                          <p className="text-white text-xs font-semibold mb-2 text-center">Sleep Timer</p>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {[{l:'5m',v:300},{l:'15m',v:900},{l:'30m',v:1800},{l:'45m',v:2700},{l:'60m',v:3600}].map(o => (
+                              <button key={o.l} onClick={() => startSleepTimer(o.v)}
+                                className="bg-white/10 hover:bg-purple-500/30 text-white text-xs rounded-lg py-1.5 transition-colors font-mono">
+                                {o.l}
+                              </button>
+                            ))}
+                          </div>
+                          <button onClick={() => startSleepTimer('end')}
+                            className="w-full mt-1.5 bg-white/10 hover:bg-purple-500/30 text-white text-xs rounded-lg py-1.5 transition-colors">
+                            End of song
+                          </button>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
                   <button onClick={toggleShuffle} className={`transition-colors ${isShuffle ? 'text-purple-400' : 'text-gray-400 hover:text-white'}`}>
                     <Shuffle className="w-4 h-4" />
                   </button>
@@ -2442,15 +2674,15 @@ export default function Dashboard() {
                   {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
                 </button>
                 <div ref={volumeBarRef} className="w-24 bg-white/20 rounded-full h-1 relative group flex flex-col justify-center">
-                  <motion.div
-                    className="bg-white h-full rounded-full absolute left-0 top-0 pointer-events-none transition-[width] duration-100 linear"
+                  <div
+                    ref={volumeTrackRef}
+                    className="bg-white h-full rounded-full absolute left-0 top-0 pointer-events-none"
                     style={{ width: `${volume}%` }}
-                    transition={{ type: "tween", duration: 0 }}
                   >
                     <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-x-1/2 pointer-events-none">
                       <div className="w-3 h-3 bg-white rounded-full opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity shadow-[0_0_8px_rgba(255,255,255,0.5)] border-2 border-white" />
                     </div>
-                  </motion.div>
+                  </div>
                   <input
                     type="range" min="0" max="100" step="1" value={volume}
                     onChange={handleVolumeChange}

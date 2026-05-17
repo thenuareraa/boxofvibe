@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Music, Play, Users, Sparkles, Settings, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -15,6 +15,18 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  // Auto-redirect to dashboard if already logged in — optimistic, no network call.
+  // Dashboard does its own auth validation and bounces back here if the token is expired.
+  useEffect(() => {
+    const storedToken = localStorage.getItem('bov_session_token');
+    if (storedToken) {
+      router.replace('/dashboard');
+    } else {
+      setCheckingSession(false);
+    }
+  }, [router]);
 
   const handleAdminAccess = () => {
     const code = prompt('Enter admin secret code:');
@@ -94,6 +106,11 @@ export default function Home() {
       setLoading(false);
     }
   };
+
+  // Show black screen while checking session (prevents login form flash)
+  if (checkingSession) {
+    return <div className="min-h-screen bg-black" />;
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-900 via-black to-pink-900">
