@@ -176,40 +176,21 @@ export default function Dashboard() {
     }
   };
 
-  // Register all audio URLs with SW so it can intercept R2 URLs without .mp3 extension
+  // Register all audio URLs with SW (handles R2 URLs without .mp3 extension)
   useEffect(() => {
     if (songs.length === 0) return;
     swSend({ type: 'REGISTER_URLS', urls: songs.map(s => s.file_url).filter(Boolean) });
   }, [songs]);
 
-  // Pre-cache next 1 song fully when current song changes
+  // Pre-cache next 1 song fully so it plays instantly
+  const songListRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!currentSong) return;
     const activeQueue = currentQueue.length > 0 ? currentQueue : songs;
     const idx = activeQueue.findIndex(s => s.id === currentSong.id);
     const next = activeQueue[(idx + 1) % activeQueue.length];
-    if (next?.file_url) {
-      swSend({ type: 'PRECACHE_FULL', urls: [next.file_url] });
-    }
+    if (next?.file_url) swSend({ type: 'PRECACHE_FULL', urls: [next.file_url] });
   }, [currentSong]);
-
-  // IntersectionObserver: pre-cache first 300KB of songs as they scroll into view
-  const songListRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (typeof window === 'undefined' || !('IntersectionObserver' in window)) return;
-    const observer = new IntersectionObserver(entries => {
-      const visible = entries
-        .filter(e => e.isIntersecting)
-        .map(e => (e.target as HTMLElement).dataset.fileUrl)
-        .filter(Boolean) as string[];
-      if (visible.length > 0) swSend({ type: 'PRECACHE_CHUNK', urls: visible });
-    }, { rootMargin: '200px' });
-
-    const container = songListRef.current;
-    if (!container) return;
-    container.querySelectorAll('[data-file-url]').forEach(el => observer.observe(el));
-    return () => observer.disconnect();
-  }, [songs]);
 
   const addDebugLog = (message: string) => {
     const timestamp = new Date().toLocaleTimeString();
