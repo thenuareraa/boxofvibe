@@ -128,6 +128,18 @@ export default function Dashboard() {
   const audioElA = useRef<HTMLAudioElement | null>(null);
   const audioElB = useRef<HTMLAudioElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const bgPreloadPool = useRef<Map<number, HTMLAudioElement>>(new Map());
+  const isPlayingRef = useRef(false);
+  const volumeRef = useRef(70);
+  const msStreamRef = useRef<{
+    ms: MediaSource;
+    sb: SourceBuffer | null;
+    ctrl: AbortController;
+    blobUrl: string;
+    active: boolean;
+    totalBytes: number;
+    url: string;
+  } | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const progressTrackRef = useRef<HTMLDivElement>(null);
   const timeCurrentRef = useRef<HTMLSpanElement>(null);
@@ -149,6 +161,199 @@ export default function Dashboard() {
     const tmp = audioRef.current;
     audioRef.current = preloadRef.current;
     preloadRef.current = tmp;
+  };
+
+  // Keep isPlaying and volume accessible inside streaming callbacks without stale closures
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
+
+  const teardownMSStream = () => {
+    const s = msStreamRef.current;
+    if (!s) return;
+    s.active = false;
+    s.ctrl.abort();
+    try { if (s.ms.readyState === 'open') s.ms.endOfStream(); } catch {}
+    URL.revokeObjectURL(s.blobUrl);
+    msStreamRef.current = null;
+  };
+
+  const streamSong = (audio: HTMLAudioElement, url: string) => {
+    teardownMSStream();
+
+    const mime = /\.(m4a|aac|mp4)(\?|$)/i.test(url) ? 'audio/mp4' : 'audio/mpeg';
+
+    // Safari iOS does not support audio/mpeg in MSE — fall back to direct src
+    if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported(mime)) {
+      audio.src = url;
+      audio.volume = volumeRef.current / 100;
+      audio.play().catch(() => {});
+      return;
+    }
+
+    const ms = new MediaSource();
+    const blobUrl = URL.createObjectURL(ms);
+    const ctrl = new AbortController();
+    const state = {
+      ms, sb: null as SourceBuffer | null,
+      ctrl, blobUrl, active: true, totalBytes: 0, url,
+    };
+    msStreamRef.current = state;
+
+    audio.src = blobUrl;
+    audio.volume = volumeRef.current / 100;
+
+    // Helper: wait for SourceBuffer to finish an append before starting the next
+    const waitSb = () => new Promise<void>(res => {
+      if (!state.sb || !state.sb.updating) { res(); return; }
+      state.sb!.addEventListener('updateend', () => res(), { once: true });
+    });
+
+    // Fetch and pipe bytes into the SourceBuffer
+    const doFetch = async (startByte = 0) => {
+      const hdrs: Record<string, string> = {};
+      if (startByte > 0) hdrs['Range'] = `bytes=${startByte}-`;
+      try {
+        const resp = await fetch(url, {
+          headers: hdrs,
+          mode: 'cors',
+          credentials: 'omit',
+          signal: ctrl.signal,
+        });
+        if (!resp.body) throw new Error('no body');
+
+        // Record total file size so we can seek later
+        if (startByte === 0) {
+          const cl = resp.headers.get('Content-Length');
+          if (cl) state.totalBytes = parseInt(cl);
+        }
+
+        const reader = resp.body.getReader();
+        let started = false;
+
+        while (state.active) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+
+          await waitSb();
+          if (!state.active || !state.sb) break;
+
+          try {
+            state.sb.appendBuffer(value);
+          } catch (e: any) {
+            if (e.name === 'QuotaExceededError' && state.sb.buffered.length > 0 && audio.currentTime > 10) {
+              // Free old data to make room
+              state.sb.remove(0, audio.currentTime - 5);
+              await waitSb();
+              if (state.active && state.sb) {
+                try { state.sb.appendBuffer(value); } catch {}
+              }
+            }
+            continue;
+          }
+
+          // Start playing as soon as the first decoded frames are ready
+          if (!started && audio.readyState >= 2) {
+            started = true;
+            audio.play().catch(() => {});
+            console.log(`[MSE] playing after first chunk for: ${url.split('/').pop()}`);
+          }
+        }
+
+        if (state.active) {
+          await waitSb();
+          try { ms.endOfStream(); } catch {}
+        }
+      } catch (e: any) {
+        if (e.name === 'AbortError') return;
+        // Something went wrong — fall back to direct src
+        console.warn('[MSE] error, falling back:', e.message);
+        teardownMSStream();
+        audio.src = url;
+        audio.volume = volumeRef.current / 100;
+        audio.play().catch(() => {});
+      }
+    };
+
+    // Handle user seeking to a position that isn't buffered yet
+    const handleSeeking = () => {
+      if (!msStreamRef.current) return;
+      const t = audio.currentTime;
+      for (let i = 0; i < audio.buffered.length; i++) {
+        if (audio.buffered.start(i) <= t && t <= audio.buffered.end(i)) return;
+      }
+      // Not buffered — tear down MSE and use Range request to jump straight there
+      const seekUrl = msStreamRef.current.url;
+      const totalBytes = msStreamRef.current.totalBytes;
+      const duration = audio.duration;
+      teardownMSStream();
+      audio.removeEventListener('seeking', handleSeeking);
+
+      if (totalBytes > 0 && duration && isFinite(duration)) {
+        // Re-stream from the right byte offset so seek is instant
+        const byteOffset = Math.floor((t / duration) * totalBytes);
+        const ms2 = new MediaSource();
+        const blobUrl2 = URL.createObjectURL(ms2);
+        const ctrl2 = new AbortController();
+        const state2 = { ms: ms2, sb: null as SourceBuffer | null, ctrl: ctrl2, blobUrl: blobUrl2, active: true, totalBytes, url: seekUrl };
+        msStreamRef.current = state2;
+        audio.src = blobUrl2;
+        const waitSb2 = () => new Promise<void>(res => {
+          if (!state2.sb || !state2.sb.updating) { res(); return; }
+          state2.sb!.addEventListener('updateend', () => res(), { once: true });
+        });
+        ms2.addEventListener('sourceopen', async () => {
+          if (!state2.active) return;
+          try { state2.sb = ms2.addSourceBuffer(mime); } catch { return; }
+          const hdrs2: Record<string, string> = { 'Range': `bytes=${byteOffset}-` };
+          try {
+            const r2 = await fetch(seekUrl, { headers: hdrs2, mode: 'cors', credentials: 'omit', signal: ctrl2.signal });
+            if (!r2.body) throw new Error('no body');
+            const reader2 = r2.body.getReader();
+            let started2 = false;
+            while (state2.active) {
+              const { done, value } = await reader2.read();
+              if (done || !value) break;
+              await waitSb2();
+              if (!state2.active || !state2.sb) break;
+              try { state2.sb.appendBuffer(value); } catch { continue; }
+              if (!started2 && audio.readyState >= 2) {
+                started2 = true;
+                audio.currentTime = t;
+                if (isPlayingRef.current) audio.play().catch(() => {});
+              }
+            }
+            if (state2.active) { await waitSb2(); try { ms2.endOfStream(); } catch {} }
+          } catch (e: any) {
+            if (e.name === 'AbortError') return;
+            teardownMSStream();
+            audio.src = seekUrl;
+            audio.currentTime = t;
+            if (isPlayingRef.current) audio.play().catch(() => {});
+          }
+        }, { once: true });
+        audio.addEventListener('seeking', handleSeeking);
+      } else {
+        // Don't know file size — fall back to direct src
+        audio.src = seekUrl;
+        audio.currentTime = t;
+        if (isPlayingRef.current) audio.play().catch(() => {});
+      }
+    };
+
+    ms.addEventListener('sourceopen', async () => {
+      if (!state.active) return;
+      try {
+        state.sb = ms.addSourceBuffer(mime);
+      } catch {
+        teardownMSStream();
+        audio.src = url;
+        audio.volume = volumeRef.current / 100;
+        audio.play().catch(() => {});
+        return;
+      }
+      audio.addEventListener('seeking', handleSeeking);
+      await doFetch(0);
+    }, { once: true });
   };
 
   // Keep refs in sync with state
@@ -180,6 +385,17 @@ export default function Dashboard() {
   useEffect(() => {
     if (songs.length === 0) return;
     swSend({ type: 'REGISTER_URLS', urls: songs.map(s => s.file_url).filter(Boolean) });
+  }, [songs]);
+
+  // CONNECTION WARMING: one request to establish DNS+TCP+SSL to the CDN
+  useEffect(() => {
+    if (songs.length === 0) return;
+    const firstUrl = songs.find(s => s.file_url)?.file_url;
+    if (!firstUrl) return;
+    const warm = () => fetch(firstUrl, { method: 'HEAD', mode: 'cors', credentials: 'omit' }).catch(() => {});
+    warm();
+    const interval = setInterval(warm, 25000);
+    return () => clearInterval(interval);
   }, [songs]);
 
   // Pre-cache next 1 song fully so it plays instantly
@@ -421,6 +637,13 @@ export default function Dashboard() {
       return;
     }
 
+    // MSE stream already running for this song — don't touch the src
+    if (msStreamRef.current?.url === currentSong.file_url) {
+      audio.volume = volume / 100;
+      addDebugLog(`MSE active — already streaming: ${currentSong.title}`);
+      return;
+    }
+
     // Stop any bleed from previous element
     audio.pause();
     audio.currentTime = 0;
@@ -433,10 +656,9 @@ export default function Dashboard() {
       return;
     }
 
-    audio.src = currentSong.file_url;
-    audio.volume = volume / 100;
-    audio.play().catch(() => {});
-    addDebugLog(`Loading song: ${currentSong.title}`);
+    // Not preloaded — stream via MediaSource so playback starts on first chunk
+    streamSong(audio, currentSong.file_url);
+    addDebugLog(`MSE stream start: ${currentSong.title}`);
   }, [currentSong]);
 
   // AGGRESSIVE PRELOADING: Preload next 3 songs for instant playback
@@ -463,20 +685,9 @@ export default function Dashboard() {
       addDebugLog(`Preloading next: ${nextSong.title}`);
     }
 
-    // Also preload prev + next 2-5 as background Audio objects
-    const extraIndices = [-1, 2, 3, 4, 5];
-    for (const offset of extraIndices) {
-      const idx = currentIndex >= 0
-        ? (currentIndex + offset + activeQueue.length) % activeQueue.length
-        : 0;
-      const s = activeQueue[idx];
-      if (s && s.id !== currentSong.id && s.id !== nextSong?.id) {
-        const bg = new Audio();
-        bg.preload = 'auto';
-        bg.src = s.file_url;
-        bg.load();
-      }
-    }
+    // Clear the pool — only 1 song preloaded at a time
+    bgPreloadPool.current.forEach(el => { el.src = ''; });
+    bgPreloadPool.current.clear();
   }, [currentSong, queueIndex, currentQueue, isShuffle, shuffleQueue, isCustomLoopActive, customLoopQueue]);
 
   // CRITICAL: Preload on hover for instant playback feel
@@ -786,6 +997,11 @@ export default function Dashboard() {
     // Immediately silence current audio to prevent any bleed
     if (audioRef.current) { audioRef.current.pause(); audioRef.current.volume = 0; }
 
+    // Stop any competing preload download so full bandwidth goes to the clicked song
+    if (preloadRef.current && preloadRef.current.src !== song.file_url) {
+      preloadRef.current.src = '';
+    }
+
     // INSTANT PLAYBACK: if song is preloaded, play that element directly
     if (preloadRef.current && preloadRef.current.src === song.file_url && preloadRef.current.readyState >= 2) {
       preloadRef.current.currentTime = 0;
@@ -793,6 +1009,10 @@ export default function Dashboard() {
       preloadRef.current.play().catch(() => {});
       swapAudioSlots();
       addDebugLog('Instant click play via slot swap!');
+    } else if (audioRef.current) {
+      // Not preloaded — stream via MediaSource so playback starts on first chunk
+      streamSong(audioRef.current, song.file_url);
+      addDebugLog(`MSE stream: ${song.title}`);
     }
 
     setCurrentSong(song);
@@ -807,6 +1027,7 @@ export default function Dashboard() {
 
   const skipNext = () => {
     if (!currentSong) return;
+    teardownMSStream();
 
     // Track partial play of current song
     if (audioRef.current) {
@@ -825,6 +1046,11 @@ export default function Dashboard() {
 
     // Immediately silence current audio
     if (audioRef.current) { audioRef.current.pause(); audioRef.current.volume = 0; }
+
+    // Stop any competing preload if it's not the song we're about to play
+    if (preloadRef.current && preloadRef.current.src !== nextSong.file_url) {
+      preloadRef.current.src = '';
+    }
 
     // INSTANT PLAYBACK: play preloaded element directly via slot swap
     if (preloadRef.current && preloadRef.current.src === nextSong.file_url && preloadRef.current.readyState >= 2) {
@@ -846,6 +1072,7 @@ export default function Dashboard() {
 
   const skipPrevious = () => {
     if (!currentSong) return;
+    teardownMSStream();
 
     // Immediately silence current audio to prevent bleed
     if (audioRef.current) { audioRef.current.pause(); audioRef.current.volume = 0; }
