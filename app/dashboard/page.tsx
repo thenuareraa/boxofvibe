@@ -363,6 +363,12 @@ export default function Dashboard() {
         if (autoPlay) audio.play().catch(() => {});
         return;
       }
+      // Fire HEAD request in background to get file size for incomplete-stream detection.
+      // Runs in parallel with doFetch so there is no added startup delay.
+      fetch(url, { method: 'HEAD', mode: 'cors', credentials: 'omit', signal: ctrl.signal })
+        .then(r => { const cl = r.headers.get('Content-Length'); if (cl) state.totalBytes = parseInt(cl); })
+        .catch(() => {});
+
       audio.addEventListener('seeking', handleSeeking);
       await doFetch(0);
     }, { once: true });
