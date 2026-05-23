@@ -40,7 +40,7 @@ import { supabase, type Song } from '@/lib/supabase';
 import { registerPlugin, Capacitor } from '@capacitor/core';
 
 const MusicNotification = registerPlugin<{
-  update(opts: { title: string; artist: string; coverUrl: string | null; isPlaying: boolean }): Promise<void>;
+  update(opts: { title: string; artist: string; coverUrl: string | null; isPlaying: boolean; isLiked: boolean; isRepeat: boolean }): Promise<void>;
   stop(): Promise<void>;
   addListener(event: 'notificationAction', handler: (data: { action: string }) => void): Promise<{ remove: () => void }>;
 }>('MusicNotification');
