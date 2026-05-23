@@ -27,6 +27,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ─── Progress bar animation ────────────────────────── */
+@keyframes progress-fill {
+  from { width: 0%; }
+  to   { width: 100%; }
+}
+
 /* ─── Smooth scroll ──────────────────────────────────── */
 * {
   scroll-behavior: smooth;

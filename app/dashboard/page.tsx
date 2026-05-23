@@ -149,6 +149,7 @@ export default function Dashboard() {
   const volumeTrackRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const isDraggingProgressRef = useRef(false);
   const customLoopActiveRef = useRef(isCustomLoopActive);
   const customLoopQueueRef = useRef(customLoopQueue);
 
@@ -179,13 +180,21 @@ export default function Dashboard() {
     msStreamRef.current = null;
   };
 
+  const syncProgressBar = () => {};
+  const pauseProgressBar = () => {};
+
   const streamSong = (audio: HTMLAudioElement, url: string, autoPlay = true) => {
     teardownMSStream();
 
     const mime = /\.(m4a|aac|mp4)(\?|$)/i.test(url) ? 'audio/mp4' : 'audio/mpeg';
 
+    // Mobile browsers throttle/interrupt MSE fetch streams causing early cutoff and
+    // delayed duration detection. Native audio src is far more reliable on mobile.
+    const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+
     // Safari iOS does not support audio/mpeg in MSE — fall back to direct src
-    if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported(mime)) {
+    // Mobile devices also bypass MSE for the same reliability reasons
+    if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported(mime) || isMobile) {
       audio.src = url;
       audio.volume = volumeRef.current / 100;
       if (autoPlay) audio.play().catch(() => {});
@@ -209,6 +218,9 @@ export default function Dashboard() {
       if (!state.sb || !state.sb.updating) { res(); return; }
       state.sb!.addEventListener('updateend', () => res(), { once: true });
     });
+
+    // Resolves when HEAD response returns the Content-Length (fired in parallel with stream)
+    let headDone: Promise<void> | null = null;
 
     // Fetch and pipe bytes into the SourceBuffer
     const doFetch = async (startByte = 0) => {
@@ -265,12 +277,26 @@ export default function Dashboard() {
 
         if (state.active) {
           await waitSb();
-          // Check if stream ended prematurely (received < 95% of expected bytes)
+          // Wait for HEAD to resolve so totalBytes is set before we decide if stream is complete
+          if (headDone) { await headDone; headDone = null; }
           const totalReceived = startByte + bytesReceived;
           const isIncomplete = state.totalBytes > 0 && totalReceived < state.totalBytes * 0.95;
+
           if (isIncomplete) {
-            console.warn(`[MSE] stream cut short (${totalReceived}/${state.totalBytes} bytes) — resuming from byte ${totalReceived}`);
+            // Known incomplete — resume from where we stopped
+            console.warn(`[MSE] stream cut short (${totalReceived}/${state.totalBytes} bytes) — resuming`);
             await doFetch(totalReceived);
+          } else if (state.totalBytes === 0) {
+            // Content-Length unknown even after HEAD — can't tell if complete.
+            // Fall back to direct src from current position to guarantee full playback.
+            const currentTime = audio.currentTime;
+            teardownMSStream();
+            audio.src = url;
+            audio.volume = volumeRef.current / 100;
+            audio.addEventListener('canplay', () => {
+              audio.currentTime = currentTime;
+              if (isPlayingRef.current) audio.play().catch(() => {});
+            }, { once: true });
           } else {
             try { ms.endOfStream(); } catch {}
           }
@@ -352,6 +378,11 @@ export default function Dashboard() {
       }
     };
 
+    // Fire HEAD in parallel — result will be ready long before stream ends
+    headDone = fetch(url, { method: 'HEAD', mode: 'cors', credentials: 'omit', signal: ctrl.signal })
+      .then(head => { const cl = head.headers.get('Content-Length'); if (cl) state.totalBytes = parseInt(cl); })
+      .catch(() => {});
+
     ms.addEventListener('sourceopen', async () => {
       if (!state.active) return;
       try {
@@ -363,12 +394,6 @@ export default function Dashboard() {
         if (autoPlay) audio.play().catch(() => {});
         return;
       }
-      // Fire HEAD request in background to get file size for incomplete-stream detection.
-      // Runs in parallel with doFetch so there is no added startup delay.
-      fetch(url, { method: 'HEAD', mode: 'cors', credentials: 'omit', signal: ctrl.signal })
-        .then(r => { const cl = r.headers.get('Content-Length'); if (cl) state.totalBytes = parseInt(cl); })
-        .catch(() => {});
-
       audio.addEventListener('seeking', handleSeeking);
       await doFetch(0);
     }, { once: true });
@@ -753,23 +778,17 @@ export default function Dashboard() {
     if (!audio) return;
 
     const updateUI = () => {
-      if (!audio || !progressTrackRef.current || isDraggingProgress) {
-        animationFrameRef.current = requestAnimationFrame(updateUI);
-        return;
+      if (!audio) { animationFrameRef.current = requestAnimationFrame(updateUI); return; }
+      if (!isDraggingProgressRef.current) {
+        const t = formatTime(audio.currentTime);
+        if (timeCurrentRef.current) timeCurrentRef.current.innerText = t;
+        if (mobileTimeRef.current) mobileTimeRef.current.innerText = t;
       }
-      
-      const p = (audio.currentTime / audio.duration) * 100;
-      const progressVal = isNaN(p) ? 0 : p;
-      progressTrackRef.current.style.width = `${progressVal}%`;
-      const t = formatTime(audio.currentTime);
-      if (timeCurrentRef.current) timeCurrentRef.current.innerText = t;
-      if (mobileTimeRef.current) mobileTimeRef.current.innerText = t;
-
       animationFrameRef.current = requestAnimationFrame(updateUI);
     };
 
     const handleTimeUpdate = () => {
-      // VIBE LOOP: check segment boundaries (active OR preview while modal open)
+      // VIBE LOOP: check segment boundaries
       if ((isVibeLoopActive || showVibeLoop) && audio.duration) {
         const endTime = (vibeLoopEnd / 100) * audio.duration;
         const startTime = (vibeLoopStart / 100) * audio.duration;
@@ -777,10 +796,22 @@ export default function Dashboard() {
           audio.currentTime = startTime;
         }
       }
+      // Smooth progress bar: CSS transition fills the gap between timeupdate fires (~250ms)
+      if (!isDraggingProgressRef.current && progressTrackRef.current) {
+        const dur = audio.duration;
+        if (dur && isFinite(dur) && dur > 0) {
+          const pct = (audio.currentTime / dur) * 100;
+          progressTrackRef.current.style.transition = 'width 0.3s linear';
+          progressTrackRef.current.style.width = `${pct}%`;
+        }
+      }
     };
 
     if (isPlaying) {
       animationFrameRef.current = requestAnimationFrame(updateUI);
+      syncProgressBar();
+    } else {
+      pauseProgressBar();
     }
 
     const handleEnded = () => {
@@ -849,6 +880,7 @@ export default function Dashboard() {
 
     const handleLoadedMetadata = () => {
       audio.volume = volume / 100;
+      if (isPlaying) syncProgressBar();
     };
 
     const handleCanPlay = () => {
@@ -891,11 +923,16 @@ export default function Dashboard() {
     audio.addEventListener('progress', handleProgress);
     audio.addEventListener('error', handleError);
 
+    // Re-fire timeupdate logic when browser resolves the duration (common with streamed audio)
+    const handleDurationChange = () => { handleTimeUpdate(); };
+    audio.addEventListener('durationchange', handleDurationChange);
+
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
       audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('durationchange', handleDurationChange);
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('loadeddata', handleLoadedData);
@@ -1072,7 +1109,7 @@ export default function Dashboard() {
 
     setCurrentSong(song);
     setIsPlaying(true);
-    if (progressTrackRef.current) progressTrackRef.current.style.width = '0%';
+    if (progressTrackRef.current) { progressTrackRef.current.style.transition = 'none'; progressTrackRef.current.style.width = '0%'; }
     if (timeCurrentRef.current) timeCurrentRef.current.innerText = '0:00';
     if (mobileTimeRef.current) mobileTimeRef.current.innerText = '0:00';
 
@@ -1582,7 +1619,6 @@ export default function Dashboard() {
     const newTime = audioRef.current.duration * percent;
     audioRef.current.currentTime = newTime;
     
-    // Optimistic UI update during native drag
     if (progressTrackRef.current) progressTrackRef.current.style.width = `${percent * 100}%`;
     if (timeCurrentRef.current) timeCurrentRef.current.innerText = formatTime(newTime);
     if (mobileTimeRef.current) mobileTimeRef.current.innerText = formatTime(newTime);
@@ -2730,10 +2766,10 @@ export default function Dashboard() {
                   step="0.1"
                   defaultValue="0"
                   onChange={handleProgressChange}
-                  onMouseDown={() => setIsDraggingProgress(true)}
-                  onMouseUp={() => setIsDraggingProgress(false)}
-                  onTouchStart={() => setIsDraggingProgress(true)}
-                  onTouchEnd={() => setIsDraggingProgress(false)}
+                  onMouseDown={() => { setIsDraggingProgress(true); isDraggingProgressRef.current = true; if (progressTrackRef.current) progressTrackRef.current.style.transition = 'none'; }}
+                  onMouseUp={() => { setIsDraggingProgress(false); isDraggingProgressRef.current = false; if (progressTrackRef.current) progressTrackRef.current.style.transition = 'width 0.3s linear'; }}
+                  onTouchStart={() => { setIsDraggingProgress(true); isDraggingProgressRef.current = true; if (progressTrackRef.current) progressTrackRef.current.style.transition = 'none'; }}
+                  onTouchEnd={() => { setIsDraggingProgress(false); isDraggingProgressRef.current = false; if (progressTrackRef.current) progressTrackRef.current.style.transition = 'width 0.3s linear'; }}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                 />
 
@@ -3589,7 +3625,7 @@ export default function Dashboard() {
                       if (selectedSongs.length > 0) {
                         setCurrentSong(selectedSongs[0]);
                         setIsPlaying(true);
-                        if (progressTrackRef.current) progressTrackRef.current.style.width = '0%';
+                        if (progressTrackRef.current) { progressTrackRef.current.style.transition = 'none'; progressTrackRef.current.style.width = '0%'; }
                         if (timeCurrentRef.current) timeCurrentRef.current.innerText = '0:00';
                         if (mobileTimeRef.current) mobileTimeRef.current.innerText = '0:00';
                         trackPlay(selectedSongs[0].id, false, 0);
