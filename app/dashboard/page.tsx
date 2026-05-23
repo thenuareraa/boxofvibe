@@ -50,6 +50,7 @@ export default function Dashboard() {
   const [songs, setSongs] = useState<Song[]>([]);
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [volume, setVolume] = useState(70);
   const [isMuted, setIsMuted] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
@@ -166,6 +167,7 @@ export default function Dashboard() {
   // Keep isPlaying and volume accessible inside streaming callbacks without stale closures
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
+  useEffect(() => { if (isPlaying) setHasPlayedOnce(true); }, [isPlaying]);
 
   const teardownMSStream = () => {
     const s = msStreamRef.current;
@@ -177,7 +179,7 @@ export default function Dashboard() {
     msStreamRef.current = null;
   };
 
-  const streamSong = (audio: HTMLAudioElement, url: string) => {
+  const streamSong = (audio: HTMLAudioElement, url: string, autoPlay = true) => {
     teardownMSStream();
 
     const mime = /\.(m4a|aac|mp4)(\?|$)/i.test(url) ? 'audio/mp4' : 'audio/mpeg';
@@ -186,7 +188,7 @@ export default function Dashboard() {
     if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported(mime)) {
       audio.src = url;
       audio.volume = volumeRef.current / 100;
-      audio.play().catch(() => {});
+      if (autoPlay) audio.play().catch(() => {});
       return;
     }
 
@@ -229,11 +231,13 @@ export default function Dashboard() {
 
         const reader = resp.body.getReader();
         let started = false;
+        let bytesReceived = 0;
 
         while (state.active) {
           const { done, value } = await reader.read();
           if (done || !value) break;
 
+          bytesReceived += value.byteLength;
           await waitSb();
           if (!state.active || !state.sb) break;
 
@@ -254,14 +258,22 @@ export default function Dashboard() {
           // Start playing as soon as the first decoded frames are ready
           if (!started && audio.readyState >= 2) {
             started = true;
-            audio.play().catch(() => {});
+            if (autoPlay) audio.play().catch(() => {});
             console.log(`[MSE] playing after first chunk for: ${url.split('/').pop()}`);
           }
         }
 
         if (state.active) {
           await waitSb();
-          try { ms.endOfStream(); } catch {}
+          // Check if stream ended prematurely (received < 95% of expected bytes)
+          const totalReceived = startByte + bytesReceived;
+          const isIncomplete = state.totalBytes > 0 && totalReceived < state.totalBytes * 0.95;
+          if (isIncomplete) {
+            console.warn(`[MSE] stream cut short (${totalReceived}/${state.totalBytes} bytes) — resuming from byte ${totalReceived}`);
+            await doFetch(totalReceived);
+          } else {
+            try { ms.endOfStream(); } catch {}
+          }
         }
       } catch (e: any) {
         if (e.name === 'AbortError') return;
@@ -270,7 +282,7 @@ export default function Dashboard() {
         teardownMSStream();
         audio.src = url;
         audio.volume = volumeRef.current / 100;
-        audio.play().catch(() => {});
+        if (autoPlay) audio.play().catch(() => {});
       }
     };
 
@@ -348,7 +360,7 @@ export default function Dashboard() {
         teardownMSStream();
         audio.src = url;
         audio.volume = volumeRef.current / 100;
-        audio.play().catch(() => {});
+        if (autoPlay) audio.play().catch(() => {});
         return;
       }
       audio.addEventListener('seeking', handleSeeking);
@@ -443,10 +455,9 @@ export default function Dashboard() {
   // Fetch songs and liked songs from database
   useEffect(() => {
     const fetchData = async () => {
-      setLoading(true);
-
-      // INSTANT STARTUP: load cached songs first so audio starts buffering immediately
+      // INSTANT STARTUP: load cached songs first so list appears immediately
       const lastSongId = localStorage.getItem('bov_last_song_id');
+      let loadedFromCache = false;
       try {
         const cached = localStorage.getItem('bov_songs_cache');
         if (cached) {
@@ -458,11 +469,8 @@ export default function Dashboard() {
             setCurrentSong(firstSong);
             setCurrentQueue(cachedSongs);
             setQueueIndex(cachedSongs.findIndex((s) => s.id === firstSong.id));
-            // Pre-warm audio immediately from cache (before Supabase responds)
-            if (audioRef.current) {
-              audioRef.current.src = firstSong.file_url;
-              audioRef.current.load();
-            }
+            loadedFromCache = true;
+            setLoading(false); // Hide spinner immediately — list is ready
             addDebugLog(`Instant load from cache: ${firstSong.title}`);
           }
         }
@@ -470,7 +478,7 @@ export default function Dashboard() {
         // Cache parse error — continue to fresh fetch
       }
 
-      // Fetch fresh songs from Supabase (updates cache for next visit)
+      // Fetch fresh songs from Supabase in background (updates cache for next visit)
       const { data: songsData, error: songsError } = await supabase
         .from('songs')
         .select('*')
@@ -480,7 +488,6 @@ export default function Dashboard() {
         console.error('Error fetching songs:', songsError);
       } else {
         setSongs(songsData || []);
-        // Save to cache for instant load next time
         try { localStorage.setItem('bov_songs_cache', JSON.stringify(songsData || [])); } catch {}
         if (songsData && songsData.length > 0) {
           const savedSong = lastSongId ? songsData.find((s: Song) => s.id === parseInt(lastSongId)) : null;
@@ -498,7 +505,7 @@ export default function Dashboard() {
         }
       }
 
-      // Fetch liked songs for current user via custom API
+      // Fetch liked songs
       try {
         const res = await fetch('/api/custom-auth/liked-songs');
         const data = await res.json();
@@ -511,7 +518,8 @@ export default function Dashboard() {
         console.error('Error fetching liked songs:', err);
       }
 
-      setLoading(false);
+      // Only set loading false here if cache wasn't available
+      if (!loadedFromCache) setLoading(false);
     };
 
     fetchData();
@@ -540,14 +548,20 @@ export default function Dashboard() {
     };
     heartbeat();
     const interval = setInterval(heartbeat, 30000);
-    // Mark offline on unload
+    // Mark offline on unload + clear media session so notification can be dismissed
     const handleUnload = () => {
       navigator.sendBeacon('/api/custom-auth/heartbeat-offline', JSON.stringify({ user_id: user.id }));
+      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+        navigator.mediaSession.metadata = null;
+        navigator.mediaSession.playbackState = 'none';
+      }
     };
     window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
     return () => {
       clearInterval(interval);
       window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('pagehide', handleUnload);
     };
   }, [user]);
 
@@ -657,7 +671,7 @@ export default function Dashboard() {
     }
 
     // Not preloaded — stream via MediaSource so playback starts on first chunk
-    streamSong(audio, currentSong.file_url);
+    streamSong(audio, currentSong.file_url, isPlaying);
     addDebugLog(`MSE stream start: ${currentSong.title}`);
   }, [currentSong]);
 
@@ -941,6 +955,41 @@ export default function Dashboard() {
     setIsPlaying(prev => !prev);
   };
 
+  // Clear sub-views and switch tab
+  const switchTab = (tab: string) => {
+    setActiveTab(tab);
+    setSelectedPlaylist(null);
+    setPlaylistSongs([]);
+    setViewingFriend(null);
+    setViewingFriendPlaylist(null);
+    setFriendPlaylistSongs([]);
+  };
+
+  // Back button: works in both phone browser (popstate) and Capacitor native app (backbutton)
+  useEffect(() => {
+    // Push a dummy state so the browser has something to "go back" to
+    window.history.pushState({ bov: true }, '');
+
+    const handleBack = () => {
+      if (viewingFriendPlaylist) { setViewingFriendPlaylist(null); setFriendPlaylistSongs([]); }
+      else if (viewingFriend) { setViewingFriend(null); setFriendPlaylists([]); }
+      else if (selectedPlaylist) { setSelectedPlaylist(null); setPlaylistSongs([]); setActiveTab('playlists'); }
+      else if (activeTab !== 'home') { setActiveTab('home'); }
+      // Push another dummy state so next back press is intercepted again
+      window.history.pushState({ bov: true }, '');
+    };
+
+    // popstate fires in phone browser when back is pressed
+    window.addEventListener('popstate', handleBack);
+    // backbutton fires in Capacitor native Android app
+    document.addEventListener('backbutton', handleBack);
+
+    return () => {
+      window.removeEventListener('popstate', handleBack);
+      document.removeEventListener('backbutton', handleBack);
+    };
+  }, [activeTab, selectedPlaylist, viewingFriend, viewingFriendPlaylist]);
+
   // Keyboard controls
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1011,7 +1060,7 @@ export default function Dashboard() {
       addDebugLog('Instant click play via slot swap!');
     } else if (audioRef.current) {
       // Not preloaded — stream via MediaSource so playback starts on first chunk
-      streamSong(audioRef.current, song.file_url);
+      streamSong(audioRef.current, song.file_url, true);
       addDebugLog(`MSE stream: ${song.title}`);
     }
 
@@ -1145,17 +1194,22 @@ export default function Dashboard() {
       artist: currentSong.artist || 'BoxOfVibe',
       coverUrl: currentSong.cover_url || null,
       isPlaying,
+      isLiked: likedSongs.has(currentSong.id),
+      isRepeat,
     }).catch(() => {});
-  }, [currentSong, isPlaying]);
+  }, [currentSong, isPlaying, isRepeat, likedSongs]);
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     let cleanup: (() => void) | null = null;
     MusicNotification.addListener('notificationAction', ({ action }) => {
-      if (action === 'play')  setIsPlaying(true);
-      if (action === 'pause') setIsPlaying(false);
-      if (action === 'next')  skipNext();
-      if (action === 'prev')  skipPrevious();
+      if (action === 'play')   setIsPlaying(true);
+      if (action === 'pause')  setIsPlaying(false);
+      if (action === 'next')   skipNext();
+      if (action === 'prev')   skipPrevious();
+      if (action === 'repeat') setIsRepeat(prev => !prev);
+      if (action === 'like' && currentSong) toggleLike(currentSong.id);
+      if (action === 'sleep')  setShowSleepTimer(true);
     }).then(handle => { cleanup = handle.remove; });
     return () => { cleanup?.(); };
   }, []);
@@ -1621,11 +1675,7 @@ export default function Dashboard() {
         {/* Navigation */}
         <nav className="space-y-2 flex-1">
           <button
-            onClick={() => {
-              setActiveTab('home');
-              setSelectedPlaylist(null);
-              setPlaylistSongs([]);
-            }}
+            onClick={() => switchTab('home')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
               activeTab === 'home'
                 ? 'bg-white/10 text-white'
@@ -1637,11 +1687,7 @@ export default function Dashboard() {
           </button>
 
           <button
-            onClick={() => {
-              setActiveTab('liked');
-              setSelectedPlaylist(null);
-              setPlaylistSongs([]);
-            }}
+            onClick={() => switchTab('liked')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
               activeTab === 'liked'
                 ? 'bg-white/10 text-white'
@@ -1653,11 +1699,7 @@ export default function Dashboard() {
           </button>
 
           <button
-            onClick={() => {
-              setActiveTab('playlists');
-              setSelectedPlaylist(null);
-              setPlaylistSongs([]);
-            }}
+            onClick={() => switchTab('playlists')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
               activeTab === 'playlists'
                 ? 'bg-white/10 text-white'
@@ -1669,12 +1711,7 @@ export default function Dashboard() {
           </button>
 
           <button
-            onClick={() => {
-              setActiveTab('friends');
-              setSelectedPlaylist(null);
-              setPlaylistSongs([]);
-              fetchFriends();
-            }}
+            onClick={() => { switchTab('friends'); fetchFriends(); }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
               activeTab === 'friends'
                 ? 'bg-white/10 text-white'
@@ -1942,7 +1979,7 @@ export default function Dashboard() {
                         <div className="flex items-center gap-4">
                           {/* Equalizer or Play Icon */}
                           <div className="w-12 h-12 flex-shrink-0 relative">
-                            {currentSong?.id === song.id ? (
+                            {currentSong?.id === song.id && (isPlaying || hasPlayedOnce) ? (
                               <div className="w-full h-full flex items-center justify-center gap-0.5">
                                 <div className={`eq-bar ${isPlaying ? '' : 'eq-bar-paused'}`} />
                                 <div className={`eq-bar ${isPlaying ? '' : 'eq-bar-paused'}`} />
@@ -2035,16 +2072,16 @@ export default function Dashboard() {
                       key={song.id}
                       onClick={() => handleSongClick(song)}
                       onMouseEnter={() => handleSongHover(song)}
-                      className={`group relative rounded-lg px-4 py-3 border transition-colors cursor-pointer ${
+                      className={`group relative rounded-lg px-4 py-3 border transition-all duration-300 ease-out cursor-pointer ${
                         currentSong?.id === song.id
                           ? 'border-purple-500/50 bg-white/10'
                           : 'border-white/5 bg-white/[0.02] hover:bg-white/5 hover:border-white/10'
                       }`}
                     >
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2 md:gap-4">
                         {/* Equalizer or Play Icon */}
-                        <div className="w-12 h-12 flex-shrink-0 relative">
-                          {currentSong?.id === song.id ? (
+                        <div className="w-9 h-9 md:w-12 md:h-12 flex-shrink-0 relative">
+                          {currentSong?.id === song.id && (isPlaying || hasPlayedOnce) ? (
                             <div className="w-full h-full flex items-center justify-center gap-0.5">
                               <div className={`eq-bar ${isPlaying ? '' : 'eq-bar-paused'}`} />
                               <div className={`eq-bar ${isPlaying ? '' : 'eq-bar-paused'}`} />
@@ -2053,23 +2090,23 @@ export default function Dashboard() {
                             </div>
                           ) : (
                             <div className="w-full h-full rounded-lg bg-white/5 flex items-center justify-center opacity-60 group-hover:opacity-100 group-hover:bg-purple-500/20 transition-all">
-                              <Play className="w-5 h-5 text-gray-400 group-hover:text-purple-400 transition-colors" />
+                              <Play className="w-4 h-4 md:w-5 md:h-5 text-gray-400 group-hover:text-purple-400 transition-colors" />
                             </div>
                           )}
                         </div>
 
                         {/* Song Info */}
                         <div className="flex-1 min-w-0">
-                          <h3 className={`font-semibold truncate transition-colors ${
+                          <h3 className={`text-sm md:text-base font-semibold truncate transition-colors ${
                             currentSong?.id === song.id ? 'text-purple-300' : 'text-white group-hover:text-purple-200'
                           }`}>
                             {song.title}
                           </h3>
-                          <p className="text-gray-400 text-sm truncate">{song.artist}</p>
+                          <p className="text-gray-400 text-xs md:text-sm truncate">{song.artist}</p>
                         </div>
 
-                        {/* Duration */}
-                        <div className="text-gray-500 text-sm font-mono flex-shrink-0">
+                        {/* Duration - hidden on mobile */}
+                        <div className="hidden md:block text-gray-500 text-sm font-mono flex-shrink-0">
                           {song.duration}
                         </div>
 
@@ -2081,8 +2118,7 @@ export default function Dashboard() {
                         </div>
 
                         {/* Action Buttons */}
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {/* Heart Button - Always visible for liked songs */}
+                        <div className="flex items-center gap-3 flex-shrink-0 ml-2">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -2092,8 +2128,6 @@ export default function Dashboard() {
                           >
                             <Heart className="w-5 h-5 fill-current" />
                           </button>
-
-                          {/* Add to Playlist Button */}
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -2559,25 +2593,31 @@ export default function Dashboard() {
                 </div>
               )}
             </motion.div>
-          ) : loading ? (
-            <div className="flex items-center justify-center h-64">
-              <div className="text-white text-lg">Loading songs...</div>
-            </div>
-          ) : filteredSongs.length === 0 ? (
-            <div className="flex items-center justify-center h-64">
-              <div className="text-gray-400 text-lg">No songs found</div>
-            </div>
-          ) : (
-            <motion.div
-              key={`all-songs-${debouncedSearch}`}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-              className="space-y-1"
-              ref={songListRef}
-            >
-                {filteredSongs.map((song, index) => (
+          ) : null}
+          </AnimatePresence>
+
+          {/* Home tab — always mounted, hidden with opacity so exit animation of other tabs can finish first */}
+          <div
+            ref={songListRef}
+            style={{
+              opacity: activeTab === 'home' && !selectedPlaylist ? 1 : 0,
+              pointerEvents: activeTab === 'home' && !selectedPlaylist ? 'auto' : 'none',
+              position: activeTab === 'home' && !selectedPlaylist ? 'relative' : 'absolute',
+              width: '100%',
+              transition: activeTab === 'home' && !selectedPlaylist ? 'opacity 0.15s ease 0.18s' : 'none',
+            }}
+          >
+            {loading ? (
+              <div className="flex items-center justify-center h-64">
+                <div className="text-white text-lg">Loading songs...</div>
+              </div>
+            ) : filteredSongs.length === 0 ? (
+              <div className="flex items-center justify-center h-64">
+                <div className="text-gray-400 text-lg">No songs found</div>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {filteredSongs.map((song) => (
                   <div
                     key={song.id}
                     data-file-url={song.file_url}
@@ -2590,9 +2630,8 @@ export default function Dashboard() {
                     }`}
                   >
                     <div className="flex items-center gap-2 md:gap-4">
-                      {/* Equalizer or Play Icon */}
                       <div className="w-9 h-9 md:w-12 md:h-12 flex-shrink-0 relative">
-                        {currentSong?.id === song.id ? (
+                        {currentSong?.id === song.id && (isPlaying || hasPlayedOnce) ? (
                           <div className="w-full h-full flex items-center justify-center gap-0.5">
                             <div className={`eq-bar ${isPlaying ? '' : 'eq-bar-paused'}`} />
                             <div className={`eq-bar ${isPlaying ? '' : 'eq-bar-paused'}`} />
@@ -2605,38 +2644,22 @@ export default function Dashboard() {
                           </div>
                         )}
                       </div>
-
-                      {/* Song Info */}
                       <div className="flex-1 min-w-0">
                         <h3 className={`text-sm md:text-base font-semibold truncate transition-colors ${
                           currentSong?.id === song.id ? 'text-purple-300' : 'text-white group-hover:text-purple-200'
-                        }`}>
-                          {song.title}
-                        </h3>
+                        }`}>{song.title}</h3>
                         <p className="text-gray-400 text-xs md:text-sm truncate">{song.artist}</p>
                       </div>
-
-                      {/* Duration - hidden on mobile to save space */}
-                      <div className="hidden md:block text-gray-500 text-sm font-mono flex-shrink-0">
-                        {song.duration}
-                      </div>
-
-                      {/* Status Dot */}
+                      <div className="hidden md:block text-gray-500 text-sm font-mono flex-shrink-0">{song.duration}</div>
                       <div className="flex-shrink-0">
                         <div className={`w-2 h-2 rounded-full transition-all ${
                           currentSong?.id === song.id ? 'bg-green-500 animate-pulse shadow-lg shadow-green-500/50' : 'bg-gray-700'
                         }`} />
                       </div>
-
-                      {/* Action Buttons */}
                       <div className="flex items-center gap-3 flex-shrink-0 ml-2">
                         <button
                           onClick={(e) => { e.stopPropagation(); toggleLike(song.id); }}
-                          className={`transition-colors ${
-                            likedSongs.has(song.id)
-                              ? 'text-red-500 opacity-100'
-                              : 'text-gray-400 hover:text-white opacity-100 md:opacity-0 md:group-hover:opacity-100'
-                          }`}
+                          className={`transition-colors ${likedSongs.has(song.id) ? 'text-red-500 opacity-100' : 'text-gray-400 hover:text-white opacity-100 md:opacity-0 md:group-hover:opacity-100'}`}
                         >
                           <Heart className={`w-5 h-5 ${likedSongs.has(song.id) ? 'fill-current' : ''}`} />
                         </button>
@@ -2648,12 +2671,11 @@ export default function Dashboard() {
                         </button>
                       </div>
                     </div>
-
                   </div>
                 ))}
-            </motion.div>
-          )}
-          </AnimatePresence>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Bottom Music Player */}
@@ -3019,28 +3041,28 @@ export default function Dashboard() {
       {/* Mobile Bottom Nav */}
       <nav className="fixed bottom-0 left-0 right-0 h-16 bg-black/95 backdrop-blur-xl border-t border-white/10 flex md:hidden items-center justify-around z-50 px-2">
         <button
-          onClick={() => setActiveTab('home')}
+          onClick={() => switchTab('home')}
           className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl transition-colors ${activeTab === 'home' ? 'text-purple-400' : 'text-gray-500'}`}
         >
           <Home className="w-5 h-5" />
           <span className="text-[10px]">Home</span>
         </button>
         <button
-          onClick={() => setActiveTab('liked')}
+          onClick={() => switchTab('liked')}
           className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl transition-colors ${activeTab === 'liked' ? 'text-purple-400' : 'text-gray-500'}`}
         >
           <Heart className="w-5 h-5" />
           <span className="text-[10px]">Liked</span>
         </button>
         <button
-          onClick={() => setActiveTab('playlists')}
+          onClick={() => switchTab('playlists')}
           className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl transition-colors ${activeTab === 'playlists' ? 'text-purple-400' : 'text-gray-500'}`}
         >
           <ListMusic className="w-5 h-5" />
           <span className="text-[10px]">Playlists</span>
         </button>
         <button
-          onClick={() => setActiveTab('friends')}
+          onClick={() => switchTab('friends')}
           className={`relative flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl transition-colors ${activeTab === 'friends' ? 'text-purple-400' : 'text-gray-500'}`}
         >
           <Users className="w-5 h-5" />
@@ -3399,7 +3421,7 @@ export default function Dashboard() {
                     }`}
                   >
                     <div className="flex-shrink-0 w-6 text-center">
-                      {currentSong?.id === song.id ? (
+                      {currentSong?.id === song.id && (isPlaying || hasPlayedOnce) ? (
                         <div className={`w-3 h-3 bg-purple-500 rounded-full mx-auto ${isPlaying ? 'animate-pulse' : ''}`} />
                       ) : (
                         <span className="text-gray-400 text-sm">{index + 1}</span>
